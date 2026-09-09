@@ -13,6 +13,7 @@
     "proofread": "Proofread",
     "compose": "Compose",
     "dubbing": "Dubbing",
+    "repeat": "Repeat",
     "engines": "Engines",
     "translation": "Translate",
     "glossary": "Terms",
@@ -238,7 +239,8 @@
     "recentTasks": "Recent tasks",
     "newGenerateTranslate": "New: transcribe + translate",
     "newGenerate": "New: transcribe",
-    "newTranslate": "New: translate"
+    "newTranslate": "New: translate",
+    "groupLibrary": "Repeat · Library"
   },
   "downloadBusy": "Another download is already in progress",
   "downloadFailedToast": "Download failed: {{error}}",

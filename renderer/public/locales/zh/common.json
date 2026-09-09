@@ -13,6 +13,7 @@
     "proofread": "校对",
     "compose": "合成",
     "dubbing": "配音",
+    "repeat": "复读",
     "engines": "引擎",
     "translation": "翻译",
     "glossary": "词库",
@@ -238,7 +239,8 @@
     "recentTasks": "最近任务",
     "newGenerateTranslate": "新建：转写 + 翻译",
     "newGenerate": "新建：转写字幕",
-    "newTranslate": "新建：翻译字幕"
+    "newTranslate": "新建：翻译字幕",
+    "groupLibrary": "复读 · 媒体库"
   },
   "downloadBusy": "已有下载任务进行中，请稍后再试",
   "downloadFailedToast": "下载失败：{{error}}",

@@ -32,11 +32,17 @@ import {
   Loader2,
   MessageCircleQuestion,
   Mic,
+  Pause,
   PenLine,
+  Play,
   RefreshCw,
+  Repeat,
   Search,
   ScrollText,
   Settings,
+  SkipBack,
+  SkipForward,
+  Square,
   X,
   Zap,
   type LucideIcon,
@@ -48,6 +54,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ThemeToggle } from './ThemeToggle';
+import RepeatWorkbench from './repeat/RepeatWorkbench';
+import { repeatPlaybackBus } from './repeat/playbackBus';
+import { formatClock } from './repeat/repeatUtils';
+import type { RepeatPlaybackStatus } from './repeat/playbackBus';
 import ActivityCenter from './ActivityCenter';
 import CommandPalette from './CommandPalette';
 import { cn, openUrl } from 'lib/utils';
@@ -161,6 +171,12 @@ const NAV_CONFIG_ITEMS: NavItemDef[] = [
     icon: AudioLines,
     isActive: (p) => p.includes('ttsServices'),
   },
+  {
+    href: 'repeat',
+    labelKey: 'nav.repeat',
+    icon: Repeat,
+    isActive: (p) => p.includes('/repeat'),
+  },
 ];
 
 const NAV_SETTINGS_ITEM: NavItemDef = {
@@ -191,6 +207,7 @@ const PREFETCH_NAMESPACES = [
   'parameters',
   'modelsControl',
   'download',
+  'repeat',
 ];
 
 /** 竖排导航项：图标在上、文字在下（P0 导航规范），选中态 = soft 底 + 左缘指示条 */
@@ -245,6 +262,7 @@ const Layout = ({ children }) => {
           : 'gpuModeCpuOnly',
     );
   const { asPath } = router;
+  const onRepeat = asPath.includes('/repeat');
   // 顶栏「页面上下文」：由当前路由匹配到的导航项派生的章节名（chrome 面包屑，
   // 与枢纽页 PageHeader 的内容大标题区分——前者是常驻外壳定位、后者是页面内容）
   const activeNav = NAV_ITEMS.find((item) => item.isActive(asPath));
@@ -277,6 +295,11 @@ const Layout = ({ children }) => {
     status: string;
   } | null>(null);
   const [taskRunning, setTaskRunning] = useState(false);
+  // 复读页保活：首次进入后常驻挂载，切页保留播放/编辑状态
+  const [repeatMounted, setRepeatMounted] = useState(false);
+  const [repeatStatus, setRepeatStatus] = useState<RepeatPlaybackStatus | null>(
+    null,
+  );
   // 在线视频下载全局摘要（状态栏 pill；主进程仅在内容变化时广播）
   const [videoDownload, setVideoDownload] = useState<{
     running: boolean;
@@ -295,6 +318,15 @@ const Layout = ({ children }) => {
       // 失败终态由 update-status error 事件统一收尾
     });
   }, [t]);
+
+  // 复读页保活挂载 + 播放状态订阅
+  useEffect(() => {
+    if (onRepeat) setRepeatMounted(true);
+  }, [onRepeat]);
+
+  useEffect(() => {
+    return repeatPlaybackBus.onStatus(setRepeatStatus);
+  }, []);
 
   useLayoutEffect(() => {
     const mac = window?.ipc?.platform === 'darwin' || isMacPlatform();
@@ -893,7 +925,19 @@ const Layout = ({ children }) => {
             <ThemeToggle />
           </div>
         </header>
-        <main className="flex-1 min-h-0 overflow-auto">{children}</main>
+        <div className="relative min-h-0 flex-1">
+          <main className="absolute inset-0 overflow-auto">{children}</main>
+          {repeatMounted && (
+            <div
+              className={cn(
+                'absolute inset-0 z-10 bg-background p-3',
+                !onRepeat && 'hidden',
+              )}
+            >
+              <RepeatWorkbench active={onRepeat} />
+            </div>
+          )}
+        </div>
         <Toaster />
       </div>
 
@@ -974,6 +1018,65 @@ const Layout = ({ children }) => {
                   ? t('downloadPill.extracting', { model: downloadPill.model })
                   : `${downloadPill.model} ${Math.round(downloadPill.progress)}%`}
           </button>
+        )}
+        {repeatStatus?.hasMedia && !onRepeat && (
+          <span className="titlebar-no-drag flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5">
+            <button
+              type="button"
+              onClick={() => repeatPlaybackBus.sendCommand('prev')}
+              aria-label={t('repeat:prevSubtitle')}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <SkipBack className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => repeatPlaybackBus.sendCommand('toggle')}
+              aria-label={
+                repeatStatus.playing ? t('repeat:pause') : t('repeat:play')
+              }
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {repeatStatus.playing ? (
+                <Pause className="h-3 w-3" />
+              ) : (
+                <Play className="h-3 w-3" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => repeatPlaybackBus.sendCommand('next')}
+              aria-label={t('repeat:nextSubtitle')}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <SkipForward className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => repeatPlaybackBus.sendCommand('stop')}
+              aria-label={t('repeat:stop')}
+              className="text-destructive/80 transition-colors hover:text-destructive"
+            >
+              <Square className="h-3 w-3" />
+            </button>
+            <span className="tnum font-mono text-[10.5px]">
+              {formatClock(repeatStatus.currentTime)} /{' '}
+              {formatClock(repeatStatus.duration)}
+            </span>
+            <span className="h-1 w-14 overflow-hidden rounded-full bg-border">
+              <span
+                className="block h-full bg-primary"
+                style={{
+                  width: repeatStatus.duration
+                    ? `${(repeatStatus.currentTime / repeatStatus.duration) * 100}%`
+                    : '0%',
+                }}
+              />
+            </span>
+            <span className="text-[10.5px] text-muted-foreground">
+              {t('repeat:title')}
+            </span>
+          </span>
         )}
         <span className="flex-1" />
         <span className="tnum whitespace-nowrap font-mono text-[10.5px] text-faint">

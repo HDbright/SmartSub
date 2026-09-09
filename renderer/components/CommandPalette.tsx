@@ -20,9 +20,11 @@ import {
   PenLine,
   Plus,
   RefreshCw,
+  Repeat,
   ScrollText,
   Settings,
   Sun,
+  Video,
 } from 'lucide-react';
 import {
   CommandDialog,
@@ -35,6 +37,11 @@ import {
 } from '@/components/ui/command';
 import { openUrl } from 'lib/utils';
 import { getWorkItemTarget } from 'lib/workItemUtils';
+import {
+  LIBRARY_KEY,
+  loadJSON,
+  type LibraryData,
+} from '@/components/repeat/mediaLibrary';
 import type { WorkItem } from '../../types/workItem';
 
 /**
@@ -64,6 +71,8 @@ export default function CommandPalette({
   const router = useRouter();
   const { setTheme, theme } = useTheme();
   const [recent, setRecent] = useState<WorkItem[]>([]);
+  // 复读页媒体库：面板打开时读取，供搜索跳转
+  const [libMedia, setLibMedia] = useState<LibraryData['media']>({});
 
   const loadRecent = useCallback(async () => {
     try {
@@ -79,7 +88,14 @@ export default function CommandPalette({
   }, []);
 
   useEffect(() => {
-    if (open) loadRecent();
+    if (!open) return;
+    loadRecent();
+    try {
+      const lib = loadJSON<LibraryData | null>(LIBRARY_KEY, null);
+      setLibMedia(lib?.media || {});
+    } catch {
+      setLibMedia({});
+    }
   }, [open, loadRecent]);
 
   // 跳转：直接关闭并路由
@@ -109,6 +125,7 @@ export default function CommandPalette({
     { href: 'translation', label: t('nav.translation'), icon: Languages },
     { href: 'glossary', label: t('nav.glossary'), icon: BookOpenText },
     { href: 'ttsServices', label: t('nav.voices'), icon: AudioLines },
+    { href: 'repeat', label: t('nav.repeat'), icon: Repeat },
     { href: 'recent-tasks', label: t('cmd.recentTasks'), icon: ScrollText },
     { href: 'settings', label: t('nav.settings'), icon: Settings },
   ];
@@ -140,6 +157,26 @@ export default function CommandPalette({
             );
           })}
         </CommandGroup>
+
+        {Object.values(libMedia).length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading={t('cmd.groupLibrary')}>
+              {Object.values(libMedia)
+                .slice(0, 30)
+                .map((m) => (
+                  <CommandItem
+                    key={m.id}
+                    value={`library ${m.name}`}
+                    onSelect={() => navTo(`/${locale}/repeat?mediaId=${m.id}`)}
+                  >
+                    {m.kind === 'audio' ? <AudioLines /> : <Video />}
+                    <span className="truncate">{m.name}</span>
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          </>
+        )}
 
         {recent.length > 0 && (
           <>

@@ -28,6 +28,7 @@ import { setupAutoUpdater } from './helpers/updater';
 import { setupAppMenu } from './helpers/menu';
 import { setupWindowCloseBehavior, markQuitting } from './helpers/windowClose';
 import { setupParameterHandlers } from './helpers/ipcParameterHandlers';
+import { setupRepeatLibraryDb } from './helpers/repeatLibraryDb';
 import { setupProofreadHandlers } from './helpers/ipcProofreadHandlers';
 import { setupSubtitleMergeHandlers } from './helpers/ipcSubtitleMergeHandlers';
 import { setupDubbingHandlers } from './helpers/ipcDubbingHandlers';
@@ -186,6 +187,7 @@ app.on('before-quit', (event) => {
   // 代理须在任何联网（providers 初始化 / 下载 / 更新检测）前生效
   applyProxyFromSettings();
   setupParameterHandlers();
+  setupRepeatLibraryDb();
   setupProofreadHandlers();
   registerAddonIpcHandlers();
 
