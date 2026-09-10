@@ -14,6 +14,7 @@ const initSqlJs = require('sql.js');
 
 let db: any = null;
 let dbFile = '';
+let sessionLoadFailed = false;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS media (
@@ -106,6 +107,9 @@ function resolveWasmPath(): string {
 }
 
 function rowsToObjects(res: any): any[] {
+  // sql.js 对空表（无行）返回 []：res[0]/res[1] 均为 undefined，必须按空结果处理，
+  // 否则任意一张空表都会让 loadAll 崩溃 → 渲染层空载 → 保存时覆盖整库（数据销毁链）
+  if (!res || !res.length) return [];
   const columns = res[0];
   const values = res[1];
   return values.map((row: any[]) => {
@@ -136,6 +140,14 @@ async function getDb(): Promise<any> {
     wasmBinary: fs.readFileSync(resolveWasmPath()),
   });
   dbFile = path.join(app.getPath('userData'), 'repeat-library.sqlite3');
+  // 每次会话首次打开前留一份启动备份：任何后续覆盖事故都可从 .bak 恢复
+  try {
+    if (fs.existsSync(dbFile) && fs.statSync(dbFile).size > 0) {
+      fs.copyFileSync(dbFile, dbFile + '.bak');
+    }
+  } catch {
+    /* 备份失败不阻断启动 */
+  }
   db = fs.existsSync(dbFile)
     ? new SQL.Database(new Uint8Array(fs.readFileSync(dbFile)))
     : new SQL.Database();
@@ -419,6 +431,7 @@ export function setupRepeatLibraryDb() {
         data: isEmpty() ? null : loadAll(),
       };
     } catch (e) {
+      sessionLoadFailed = true;
       logMessage(
         `复读媒体库 SQLite 读取失败: ${(e as Error).message}`,
         'error',
@@ -430,6 +443,13 @@ export function setupRepeatLibraryDb() {
   ipcMain.handle('repeatLib:saveAll', async (_event, payload) => {
     try {
       await getDb();
+      // 载入失败过的会话禁止整包保存：防止把空状态覆盖回有数据的库
+      if (sessionLoadFailed) {
+        return {
+          success: false,
+          error: 'load-failed-guard: 载入失败期间禁止写入，防止覆盖既有数据',
+        };
+      }
       saveAll(payload);
       return { success: true };
     } catch (e) {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { isAudioPath } from 'lib/utils';
 
 /**
@@ -135,6 +136,14 @@ export function useRepeatStore(): RepeatStore {
       try {
         const res = await window?.ipc?.invoke('repeatLib:load');
         if (res?.success && res.data) dbData = res.data;
+        if (res && res.success === false && !cancelled) {
+          // 载入失败：保持 loadedRef=false 冻结自动保存，防止空状态覆盖有数据的库
+          toast.error(
+            '媒体库载入失败，为保护数据已暂停自动保存，请重启应用重试',
+          );
+          loadedRef.current = false;
+          return;
+        }
       } catch {
         /* 旧主进程无此通道，走下方迁移 */
       }
