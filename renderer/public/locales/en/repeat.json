@@ -82,7 +82,9 @@
     "shadowNeedCue": "Locate playback at a cue first",
     "micError": "Microphone unavailable: {{err}}",
     "abCleared": "AB marks cleared",
-    "shadowAutoStop": "Recording limit reached (cue + 3s), auto-stopped"
+    "shadowAutoStop": "Recording limit reached (cue + 3s), auto-stopped",
+    "speedSet": "Speed: {{speed}}x",
+    "abNotSet": "AB points not set yet"
   },
   "toggleWave": "Show/hide waveform",
   "toggleList": "Show/hide subtitle panel",
@@ -358,6 +360,11 @@
     "aShadow": "Shadow recording",
     "aCompare": "Compare playback",
     "playLast": "Play Last",
-    "playLastTitle": "Open and play the most recently played media"
+    "playLastTitle": "Open and play the most recently played media",
+    "aABack": "Move A back 0.5s (replay from new A)",
+    "aAFwd": "Move A forward 0.5s (replay from new A)",
+    "aBBack": "Move B back 0.5s",
+    "aBFwd": "Move B forward 0.5s (hold 1s to clear AB)",
+    "aSpeedCycle": "Speed cycle (0.5→0.75→1→1.25→1.5→2)"
   }
 }

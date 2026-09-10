@@ -162,6 +162,8 @@ interface QueueEngine {
 }
 
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+/** 手柄变速键的循环档位（顺序循环，不含 3x） */
+const SPEED_CYCLE = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const LOOP_OPTIONS = ['inf', '1', '2', '3', '5', '10'] as const;
 type LoopMode = (typeof LOOP_OPTIONS)[number];
 
@@ -1804,6 +1806,34 @@ export default function RepeatWorkbench({
     syncAb();
   };
 
+  /**
+   * 手柄按键微调 AB 点（AB 循环激活时有效）：
+   * A 点 ±0.5s 后从新 A 点重新开始循环播放；B 点 ±0.5s 即时生效。
+   */
+  const adjustAbPoint = (which: 'a' | 'b', delta: number) => {
+    const ab = abRef.current;
+    const v = videoRef.current;
+    if (ab.b == null) {
+      toast.warning(t('toast.abNotSet'));
+      return;
+    }
+    if (which === 'a') {
+      const a =
+        Math.round(clamp(ab.a + delta, 0, (ab.b ?? duration) - 0.3) * 10) / 10;
+      abRef.current = { ...ab, a };
+      syncAb();
+      engineSeek(a + 0.001);
+      if (v && v.paused) void v.play().catch(() => {});
+    } else {
+      const b =
+        Math.round(
+          clamp(ab.b + delta, (ab.a ?? 0) + 0.3, duration || ab.b + delta),
+        ) / 10;
+      abRef.current = { ...ab, b };
+      syncAb();
+    }
+  };
+
   const wavePickPoint = (sec: number) => {
     const ab = abRef.current;
     if (ab.state === 'pickA') setPointA(sec);
@@ -2439,6 +2469,36 @@ export default function RepeatWorkbench({
       run: () => toggleCompare(),
     },
     {
+      id: 'aBack',
+      label: t('remote.aABack'),
+      run: () => adjustAbPoint('a', -0.5),
+    },
+    {
+      id: 'aFwd',
+      label: t('remote.aAFwd'),
+      run: () => adjustAbPoint('a', 0.5),
+    },
+    {
+      id: 'bBack',
+      label: t('remote.aBBack'),
+      run: () => adjustAbPoint('b', -0.5),
+    },
+    {
+      id: 'bFwd',
+      label: t('remote.aBFwd'),
+      run: () => adjustAbPoint('b', 0.5),
+    },
+    {
+      id: 'speedCycle',
+      label: t('remote.aSpeedCycle'),
+      run: () => {
+        const idx = SPEED_CYCLE.indexOf(rate);
+        const next = SPEED_CYCLE[(idx + 1) % SPEED_CYCLE.length];
+        setRate(next);
+        toast.info(t('toast.speedSet', { speed: next }));
+      },
+    },
+    {
       id: 'speedUp',
       label: t('remote.aSpeedUp'),
       run: () =>
@@ -2590,8 +2650,14 @@ export default function RepeatWorkbench({
         }
         const actionId = bleMapRef.current[payload.value];
         if (!actionId) return;
-        // AB 循环激活时长按 B 点键 2 秒 → 清除 A/B 复读点
-        if (actionId === 'setB' && abRef.current.b != null) {
+        // 长按清除 AB：B+ 键按住 1 秒、B 点键按住 2 秒（AB 循环激活时）
+        const holdMs =
+          actionId === 'bFwd' && abRef.current.b != null
+            ? 1000
+            : actionId === 'setB' && abRef.current.b != null
+              ? 2000
+              : 0;
+        if (holdMs > 0) {
           bleHoldRef.current = {
             code: payload.value,
             actionId,
@@ -2599,7 +2665,7 @@ export default function RepeatWorkbench({
               bleHoldRef.current = null;
               stopAb();
               toast.success(t('toast.abCleared'));
-            }, 2000),
+            }, holdMs),
           };
           return;
         }

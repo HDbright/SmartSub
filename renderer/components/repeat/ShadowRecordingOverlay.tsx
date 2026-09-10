@@ -83,7 +83,7 @@ export default function ShadowRecordingOverlay({ stream }: Props) {
     <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3">
       <div
         ref={micRef}
-        className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-sky-400/80 bg-black/25 text-sky-300 shadow-lg transition-transform"
+        className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-sky-400/80 bg-black/50 text-sky-300 shadow-lg transition-transform"
       >
         <Mic className="h-8 w-8" />
       </div>
