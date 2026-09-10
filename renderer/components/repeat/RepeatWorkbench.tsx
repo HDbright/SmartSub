@@ -1832,19 +1832,22 @@ export default function RepeatWorkbench({
       return;
     }
     if (which === 'a') {
-      // A 已设（B 可有可无）：微调 A 并从新 A 播放
-      const a =
-        Math.round(clamp(ab.a + delta, 0, duration || ab.a + delta) * 10) / 10;
-      abRef.current = { ...ab, a };
+      // A 已设（B 可有可无）：微调 A 并从新 A 播放；已设 B 时不得超过 B−0.3s
+      const upper = ab.b != null ? ab.b - 0.3 : duration || ab.a + delta;
+      const a = Math.round(clamp(ab.a + delta, 0, upper) * 10) / 10;
+      const aSafe = ab.b != null ? Math.min(a, ab.b - 0.3) : a;
+      abRef.current = { ...ab, a: aSafe };
       syncAb();
-      engineSeek(a + 0.001);
+      engineSeek(aSafe + 0.001);
       if (v && v.paused) void v.play().catch(() => {});
     } else {
       const b =
         Math.round(
           clamp(ab.b + delta, (ab.a ?? 0) + 0.3, duration || ab.b + delta),
         ) / 10;
-      abRef.current = { ...ab, b };
+      // 四舍五入后硬保底：B 永远不早于 A+0.3s
+      const bSafe = Math.max(b, (ab.a ?? 0) + 0.3);
+      abRef.current = { ...ab, b: bSafe };
       syncAb();
     }
   };
