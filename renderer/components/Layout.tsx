@@ -805,34 +805,6 @@ const Layout = ({ children }) => {
               : undefined
           }
         >
-          <button
-            type="button"
-            onClick={openBleRemotePanel}
-            aria-label={t('bluetooth.remote')}
-            title={
-              bleRemoteStatus === 'connected'
-                ? t('bluetooth.connected')
-                : bleRemoteStatus === 'off'
-                  ? t('bluetooth.off')
-                  : t('bluetooth.retrying')
-            }
-            className={cn(
-              'titlebar-no-drag flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md transition-colors',
-              bleRemoteStatus === 'connected'
-                ? 'text-success hover:bg-success/10'
-                : bleRemoteStatus === 'off'
-                  ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  : 'animate-pulse text-warning hover:bg-warning/10',
-            )}
-          >
-            {bleRemoteStatus === 'connected' ? (
-              <BluetoothConnected className="h-4 w-4" />
-            ) : bleRemoteStatus === 'off' ? (
-              <BluetoothOff className="h-4 w-4" />
-            ) : (
-              <Bluetooth className="h-4 w-4" />
-            )}
-          </button>
           {currentSectionLabel && (
             <span className="titlebar-no-drag flex-shrink-0 truncate text-sm font-medium text-muted-foreground">
               {currentSectionLabel}
@@ -851,6 +823,35 @@ const Layout = ({ children }) => {
             </kbd>
           </button>
           <div className="titlebar-no-drag flex flex-shrink-0 items-center gap-1">
+            {/* 蓝牙遥控手柄状态（点击打开配置窗） */}
+            <button
+              type="button"
+              onClick={openBleRemotePanel}
+              aria-label={t('bluetooth.remote')}
+              title={
+                bleRemoteStatus === 'connected'
+                  ? t('bluetooth.connected')
+                  : bleRemoteStatus === 'off'
+                    ? t('bluetooth.off')
+                    : t('bluetooth.retrying')
+              }
+              className={cn(
+                'titlebar-no-drag flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md transition-colors',
+                bleRemoteStatus === 'connected'
+                  ? 'text-success hover:bg-success/10'
+                  : bleRemoteStatus === 'off'
+                    ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                    : 'animate-pulse text-warning hover:bg-warning/10',
+              )}
+            >
+              {bleRemoteStatus === 'connected' ? (
+                <BluetoothConnected className="h-4 w-4" />
+              ) : bleRemoteStatus === 'off' ? (
+                <BluetoothOff className="h-4 w-4" />
+              ) : (
+                <Bluetooth className="h-4 w-4" />
+              )}
+            </button>
             {/* 加速状态指示器（加速=正向绿徽章，CPU=中性灯） */}
             {accelBadge && (
               <TooltipProvider>
