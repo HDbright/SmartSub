@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import Models from '@/components/Models';
 import AiRefineControl from '@/components/tasks/AiRefineControl';
 import ManuscriptControl from '@/components/tasks/ManuscriptControl';
+import SubtitleFormatSelect from '@/components/tasks/SubtitleFormatSelect';
 import { supportedLanguage } from 'lib/utils';
 import { isProviderConfigured } from 'lib/providerUtils';
 import {
@@ -49,12 +50,16 @@ interface InlineConfigBarProps {
 function ConfigItem({
   label,
   children,
+  wrap = false,
 }: {
   label: string;
   children: React.ReactNode;
+  wrap?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div
+      className={`flex items-center gap-1.5${wrap ? ' max-w-full flex-wrap' : ''}`}
+    >
       <span className="text-xs text-muted-foreground whitespace-nowrap">
         {label}
       </span>
@@ -347,25 +352,16 @@ const InlineConfigBar: React.FC<InlineConfigBarProps> = ({
           </p>
         ) : null)}
 
-      {!typeDef.hasTranslate && (
-        <ConfigItem label={t('configBar.format')}>
-          <Select
-            value={formData.subtitleOutputFormat || 'srt'}
-            onValueChange={(v) => setValue('subtitleOutputFormat', v)}
-          >
-            <SelectTrigger className={triggerClass}>
-              <SelectValue placeholder={tHome('pleaseSelect')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="srt">{tHome('format_srt')}</SelectItem>
-              <SelectItem value="vtt">{tHome('format_vtt')}</SelectItem>
-              <SelectItem value="ass">{tHome('format_ass')}</SelectItem>
-              <SelectItem value="lrc">{tHome('format_lrc')}</SelectItem>
-              <SelectItem value="txt">{tHome('format_txt')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </ConfigItem>
-      )}
+      <ConfigItem label={t('configBar.format')} wrap>
+        <SubtitleFormatSelect
+          compact
+          config={formData}
+          onChange={(formats) => {
+            setValue('subtitleOutputFormats', formats);
+            setValue('subtitleOutputFormat', formats[0]);
+          }}
+        />
+      </ConfigItem>
     </div>
   );
 };
