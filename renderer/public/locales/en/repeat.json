@@ -86,7 +86,9 @@
     "speedSet": "Speed: {{speed}}x",
     "abNotSet": "AB points not set yet",
     "setAFirst": "Set the loop start point (A) first",
-    "abAdjusted": "Point {{point}} moved to {{time}}"
+    "abAdjusted": "Point {{point}} moved to {{time}}",
+    "abRange": "AB range {{a}} → {{b}}",
+    "abClamped": "Point {{point}} hit the limit: {{time}} (min gap 0.3s)"
   },
   "toggleWave": "Show/hide waveform",
   "toggleList": "Show/hide subtitle panel",

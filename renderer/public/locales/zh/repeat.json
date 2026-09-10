@@ -86,7 +86,9 @@
     "speedSet": "变速：{{speed}}x",
     "abNotSet": "尚未设置 AB 复读点",
     "setAFirst": "请先设置 AB 循环播放的起始 A 点",
-    "abAdjusted": "{{point}} 点已调整至 {{time}}"
+    "abAdjusted": "{{point}} 点已调整至 {{time}}",
+    "abRange": "AB 区间 {{a}} → {{b}}",
+    "abClamped": "{{point}} 点已达边界：{{time}}（与另一点最小间隔 0.3 秒）"
   },
   "toggleWave": "显示/隐藏波形条",
   "toggleList": "显示/隐藏字幕列表",

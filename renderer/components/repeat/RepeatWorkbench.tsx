@@ -1841,15 +1841,17 @@ export default function RepeatWorkbench({
       engineSeek(aSafe + 0.001);
       if (v && v.paused) void v.play().catch(() => {});
       toast.info(
-        t('toast.abAdjusted', { point: 'A', time: formatClock(aSafe) }),
+        t('toast.abRange', {
+          a: formatClock(aSafe),
+          b: formatClock(ab.b ?? 0),
+        }),
       );
     } else {
-      const b =
-        Math.round(
-          clamp(ab.b + delta, (ab.a ?? 0) + 0.3, duration || ab.b + delta),
-        ) / 10;
+      const lo = (ab.a ?? 0) + 0.3;
+      const desired = ab.b + delta;
+      const b = Math.round(clamp(desired, lo, duration || desired) * 10) / 10;
       // 四舍五入后硬保底：B 永远不早于 A+0.3s
-      const bSafe = Math.max(b, (ab.a ?? 0) + 0.3);
+      const bSafe = Math.max(b, lo);
       abRef.current = { ...ab, b: bSafe };
       syncAb();
       // 播放头已越过新 B：立即从 A 重新开始循环（不等 timeupdate/间隔，避免观感卡顿后突跳）
@@ -1857,9 +1859,19 @@ export default function RepeatWorkbench({
         engineSeek(ab.a + 0.001);
         if (v.paused) void v.play().catch(() => {});
       }
-      toast.info(
-        t('toast.abAdjusted', { point: 'B', time: formatClock(bSafe) }),
-      );
+      // 钳制发生（B− 紧贴 A / B+ 到片尾）：明确警告而非静默吸附
+      if (desired < lo - 0.05 || (duration && desired > duration + 0.05)) {
+        toast.warning(
+          t('toast.abClamped', { point: 'B', time: formatClock(bSafe) }),
+        );
+      } else {
+        toast.info(
+          t('toast.abRange', {
+            a: formatClock(ab.a ?? 0),
+            b: formatClock(bSafe),
+          }),
+        );
+      }
     }
   };
 
