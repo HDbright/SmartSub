@@ -76,6 +76,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { useHotkeys } from 'hooks/useHotkeys';
 import SubtitlePreviewOverlay from '@/components/subtitleMerge/SubtitlePreviewOverlay';
 import InteractiveSubtitleOverlay from './InteractiveSubtitleOverlay';
+import ShadowRecordingOverlay from './ShadowRecordingOverlay';
 import RemoteMapDialog, { type RemoteActionDef } from './RemoteMapDialog';
 import {
   LIBASS_SRT_PLAYRES_Y,
@@ -1657,6 +1658,17 @@ export default function RepeatWorkbench({
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v || !videoPath) return;
+    const ph = shadowPhaseRef.current;
+    if (ph === 'rec' || ph === 'gap') return; // 录音中/段间间隔：不响应
+    if (ph === 'cmp-rec' || ph === 'post-rec') {
+      // 对比/回放的录音段：空格暂停/继续录音本身
+      const a = shadowAudioRef.current;
+      if (a) {
+        if (a.paused) void a.play().catch(() => {});
+        else a.pause();
+      }
+      return;
+    }
     if (v.paused) void v.play().catch(() => {});
     else v.pause();
   };
@@ -1693,6 +1705,11 @@ export default function RepeatWorkbench({
     if (gapTimerRef.current) {
       clearTimeout(gapTimerRef.current);
       gapTimerRef.current = null;
+    }
+    // 跟读/对比：停止循环与录音（录音保存但不自动回放）
+    haltShadowPlayback();
+    if (recorderRef.current || shadowPhaseRef.current === 'rec') {
+      stopShadowRecording(false);
     }
     const v = videoRef.current;
     if (v && !v.paused) v.pause();
@@ -2148,9 +2165,19 @@ export default function RepeatWorkbench({
 
   // ---------- 快捷键（仅复读页可见时生效；保活挂载下切页后自动失能） ----------
   // ---------- 跟读录音 + 原声对比 ----------
-  // 跟读键：播放当前句 → 句尾自动暂停并开始录音 → 再按结束录音；
-  // 对比键：原声与跟读录音轮流循环播放，再按停止。
-  type ShadowPhase = 'idle' | 'orig' | 'rec' | 'cmp-orig' | 'cmp-rec';
+  // 跟读键：播放当前句 → 句尾自动录音；录音超过「句长+3 秒」自动结束（再按可提前结束）
+  //        → 自动回放录音 → 再播一遍原声后暂停；
+  // 对比键：原声 ↔ 录音轮流循环播放，段间间隔=全局循环间隔（repeatGap），
+  //        对比中可空格/点击暂停继续；再按对比键或停止键结束。
+  type ShadowPhase =
+    | 'idle'
+    | 'orig' // 跟读：原句播放中
+    | 'rec' // 录音中
+    | 'post-rec' // 录后自动回放录音
+    | 'post-orig' // 录后自动回放原句（播完暂停）
+    | 'cmp-orig' // 对比循环：原句
+    | 'cmp-rec' // 对比循环：录音
+    | 'gap'; // 对比循环：段间间隔
   const [shadowPhase, setShadowPhase] = useState<ShadowPhase>('idle');
   const shadowPhaseRef = useRef<ShadowPhase>('idle');
   const setPhase = (ph: ShadowPhase) => {
@@ -2160,10 +2187,14 @@ export default function RepeatWorkbench({
   const shadowCueRef = useRef<{ start: number; end: number } | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recChunksRef = useRef<Blob[]>([]);
+  const recStartRef = useRef(0);
+  const recAutoSeqRef = useRef(true);
   const shadowUrlRef = useRef<string | null>(null);
   const shadowAudioRef = useRef<HTMLAudioElement | null>(null);
   const compareRef = useRef(false);
   const shadowTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gapUntilRef = useRef(0);
+  const [recStream, setRecStream] = useState<MediaStream | null>(null);
 
   const stopShadowWatcher = () => {
     if (shadowTimerRef.current) {
@@ -2180,24 +2211,37 @@ export default function RepeatWorkbench({
     void v.play().catch(() => {});
   };
 
-  const startShadowWatcher = () => {
-    stopShadowWatcher();
-    shadowTimerRef.current = setInterval(() => {
-      const ph = shadowPhaseRef.current;
-      if (ph !== 'orig' && ph !== 'cmp-orig') return;
-      const v = videoRef.current;
-      const cue = shadowCueRef.current;
-      if (!v || !cue) return;
-      // 原句播放到句尾（或被暂停）→ 进入下一阶段
-      if (v.currentTime >= cue.end - 0.02 || v.paused) {
-        v.pause();
-        if (ph === 'orig') {
-          void startShadowRecording();
+  const playShadowRecording = (phase: ShadowPhase) => {
+    if (!shadowUrlRef.current) {
+      setPhase('idle');
+      return;
+    }
+    if (!shadowAudioRef.current) {
+      const a = new Audio(shadowUrlRef.current);
+      a.onended = () => {
+        if (shadowPhaseRef.current === 'post-rec') {
+          // 录后序列：回放完录音 → 再播一遍原声 → 播完暂停
+          const cue = shadowCueRef.current;
+          if (cue) {
+            playOrigSegment(cue.start, cue.end);
+            setPhase('post-orig');
+          } else {
+            setPhase('idle');
+          }
+        } else if (compareRef.current) {
+          // 对比循环：录音播完 → 间隔 repeatGap → 回到原句
+          gapUntilRef.current = Date.now() + repeatGap * 1000;
+          setPhase('gap');
         } else {
-          playShadowRecording();
+          setPhase('idle');
         }
-      }
-    }, 80);
+      };
+      shadowAudioRef.current = a;
+    }
+    const a = shadowAudioRef.current;
+    a.currentTime = 0;
+    void a.play().catch(() => {});
+    setPhase(phase);
   };
 
   const startShadowRecording = async () => {
@@ -2210,16 +2254,21 @@ export default function RepeatWorkbench({
       };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
+        setRecStream(null);
         const blob = new Blob(recChunksRef.current, {
           type: rec.mimeType || 'audio/webm',
         });
         if (shadowUrlRef.current) URL.revokeObjectURL(shadowUrlRef.current);
         shadowUrlRef.current = URL.createObjectURL(blob);
-        shadowAudioRef.current = null; // 下次对比时按新录音重建
+        shadowAudioRef.current = null; // 下次回放按新录音重建
         toast.success(t('toast.shadowSaved'));
+        if (recAutoSeqRef.current) playShadowRecording('post-rec');
+        else setPhase('idle');
       };
       rec.start();
       recorderRef.current = rec;
+      recStartRef.current = Date.now();
+      setRecStream(stream);
       setPhase('rec');
       toast.info(t('toast.shadowRecording'));
     } catch (e) {
@@ -2228,52 +2277,66 @@ export default function RepeatWorkbench({
     }
   };
 
-  const stopShadowRecording = () => {
+  /** autoSeq：结束后是否自动「回放录音→重播原声→暂停」 */
+  const stopShadowRecording = (autoSeq = true) => {
     const rec = recorderRef.current;
-    if (rec && rec.state !== 'inactive') rec.stop();
     recorderRef.current = null;
+    recAutoSeqRef.current = autoSeq;
     stopShadowWatcher();
-    setPhase('idle');
+    if (rec && rec.state !== 'inactive') rec.stop();
+    else setPhase('idle');
   };
 
-  const playShadowRecording = () => {
-    if (!shadowUrlRef.current) {
-      compareRef.current = false;
-      stopShadowWatcher();
-      setPhase('idle');
-      toast.warning(t('toast.compareNeedRec'));
-      return;
-    }
-    if (!shadowAudioRef.current) {
-      const a = new Audio(shadowUrlRef.current);
-      a.onended = () => {
-        if (compareRef.current && shadowCueRef.current) {
-          playOrigSegment(shadowCueRef.current.start, shadowCueRef.current.end);
-        } else {
-          setPhase('idle');
+  const startShadowWatcher = () => {
+    stopShadowWatcher();
+    shadowTimerRef.current = setInterval(() => {
+      const ph = shadowPhaseRef.current;
+      const v = videoRef.current;
+      const cue = shadowCueRef.current;
+      if (ph === 'orig' || ph === 'post-orig' || ph === 'cmp-orig') {
+        if (!v || !cue) return;
+        // 仅按播放进度判定句尾：暂停=用户主动暂停，恢复后继续
+        if (v.currentTime >= cue.end - 0.02) {
+          v.pause();
+          if (ph === 'orig') {
+            void startShadowRecording();
+          } else if (ph === 'post-orig') {
+            setPhase('idle');
+          } else {
+            gapUntilRef.current = Date.now() + repeatGap * 1000;
+            setPhase('gap');
+          }
         }
-      };
-      shadowAudioRef.current = a;
-    }
-    const a = shadowAudioRef.current;
-    a.currentTime = 0;
-    void a.play().catch(() => {});
-    setPhase('cmp-rec');
+      } else if (ph === 'rec') {
+        // 录音时长超过「句长 + 3 秒」自动结束
+        const limitSec = (cue ? cue.end - cue.start : 10) + 3;
+        if (
+          recorderRef.current &&
+          Date.now() - recStartRef.current > limitSec * 1000
+        ) {
+          toast.info(t('toast.shadowAutoStop'));
+          stopShadowRecording();
+        }
+      } else if (ph === 'gap') {
+        if (Date.now() >= gapUntilRef.current) playShadowRecording('cmp-rec');
+      }
+    }, 80);
   };
 
-  /** 手柄键：跟读录音（播放原句→句尾自动录音→再按结束） */
+  /** 停掉对比/回放类活动（不动录音状态） */
+  const haltShadowPlayback = () => {
+    compareRef.current = false;
+    shadowAudioRef.current?.pause();
+    stopShadowWatcher();
+  };
+
+  /** 手柄键：跟读录音（播原句→句尾自动录音→超时/手动结束→自动回放序列） */
   const toggleShadow = () => {
     if (shadowPhaseRef.current === 'rec') {
-      stopShadowRecording();
+      stopShadowRecording(); // 手动提前结束，仍走自动回放序列
       return;
     }
-    if (shadowPhaseRef.current !== 'idle') {
-      // 流程被打断（对比中/原句播放中）：先复位
-      compareRef.current = false;
-      shadowAudioRef.current?.pause();
-      stopShadowWatcher();
-      setPhase('idle');
-    }
+    if (shadowPhaseRef.current !== 'idle') haltShadowPlayback();
     const i = activeCueIndex;
     if (i < 0 || !cues[i]) {
       toast.warning(t('toast.shadowNeedCue'));
@@ -2282,22 +2345,16 @@ export default function RepeatWorkbench({
     if (singleRepeatRef.current) setSingleRepeat(false);
     stopAll();
     compareRef.current = false;
-    const cue = {
-      start: cues[i].start,
-      end: Math.max(cues[i].end, cues[i].start + 0.3),
-    };
-    playOrigSegment(cue.start, cue.end);
+    playOrigSegment(cues[i].start, Math.max(cues[i].end, cues[i].start + 0.3));
     setPhase('orig');
     startShadowWatcher();
     toast.info(t('toast.shadowStart'));
   };
 
-  /** 手柄键：原声 ↔ 跟读录音轮流对比播放（再按停止） */
+  /** 手柄键：原声 ↔ 录音循环对比（段间按全局循环间隔；再按/停止键结束） */
   const toggleCompare = () => {
     if (compareRef.current) {
-      compareRef.current = false;
-      shadowAudioRef.current?.pause();
-      stopShadowWatcher();
+      haltShadowPlayback();
       setPhase('idle');
       return;
     }
@@ -3651,6 +3708,9 @@ export default function RepeatWorkbench({
                     </div>
                   );
                 })()}
+              {shadowPhase === 'rec' && recStream && (
+                <ShadowRecordingOverlay stream={recStream} />
+              )}
               {mediaError ? (
                 <div className="flex h-40 items-center text-sm text-white/70">
                   {t('toast.videoError')}

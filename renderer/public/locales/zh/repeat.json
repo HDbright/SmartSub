@@ -81,7 +81,8 @@
     "compareNeedRec": "暂无跟读录音，请先按「跟读录音」键录制",
     "shadowNeedCue": "请先将播放定位到某一句再跟读",
     "micError": "麦克风不可用：{{err}}",
-    "abCleared": "已取消 AB 标记"
+    "abCleared": "已取消 AB 标记",
+    "shadowAutoStop": "录音已达上限（句长 + 3 秒），自动结束"
   },
   "toggleWave": "显示/隐藏波形条",
   "toggleList": "显示/隐藏字幕列表",
