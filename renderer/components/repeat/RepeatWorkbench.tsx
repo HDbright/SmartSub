@@ -1807,19 +1807,34 @@ export default function RepeatWorkbench({
   };
 
   /**
-   * 手柄按键微调 AB 点（AB 循环激活时有效）：
-   * A 点 ±0.5s 后从新 A 点重新开始循环播放；B 点 ±0.5s 即时生效。
+   * 手柄 A−/A+/B−/B+ 键的设点与微调：
+   * - 无 A 点时按 A−/A+ → 当前时间设为 A 点；
+   * - 已有 A 点时按 A−/A+ → A 点 ∓/±0.5s 并从新 A 点播放（无论 B 是否已设）；
+   * - 无 A 点时按 B−/B+ → 提示先设 A 点；
+   * - 有 A 点无 B 点时按 B−/B+ → 当前时间设为 B 点并开始循环；
+   * - A、B 都已设时按 B−/B+ → B 点 ∓/±0.5s（保持最小间隔 0.3s）。
    */
   const adjustAbPoint = (which: 'a' | 'b', delta: number) => {
     const ab = abRef.current;
     const v = videoRef.current;
-    if (ab.b == null) {
-      toast.warning(t('toast.abNotSet'));
+    const now = v ? v.currentTime : 0;
+
+    if (which === 'b' && ab.a == null) {
+      toast.warning(t('toast.setAFirst'));
+      return;
+    }
+    if (which === 'a' && ab.a == null) {
+      setPointA(now);
+      return;
+    }
+    if (which === 'b' && ab.b == null) {
+      setPointB(now);
       return;
     }
     if (which === 'a') {
+      // A 已设（B 可有可无）：微调 A 并从新 A 播放
       const a =
-        Math.round(clamp(ab.a + delta, 0, (ab.b ?? duration) - 0.3) * 10) / 10;
+        Math.round(clamp(ab.a + delta, 0, duration || ab.a + delta) * 10) / 10;
       abRef.current = { ...ab, a };
       syncAb();
       engineSeek(a + 0.001);

@@ -84,7 +84,8 @@
     "abCleared": "已取消 AB 标记",
     "shadowAutoStop": "录音已达上限（句长 + 3 秒），自动结束",
     "speedSet": "变速：{{speed}}x",
-    "abNotSet": "尚未设置 AB 复读点"
+    "abNotSet": "尚未设置 AB 复读点",
+    "setAFirst": "请先设置 AB 循环播放的起始 A 点"
   },
   "toggleWave": "显示/隐藏波形条",
   "toggleList": "显示/隐藏字幕列表",
@@ -361,10 +362,10 @@
     "aCompare": "原声对比",
     "playLast": "播放上次内容",
     "playLastTitle": "直接打开并播放最近一次播放的媒体",
-    "aABack": "A 点前移 0.5 秒（并从新 A 播放）",
-    "aAFwd": "A 点后移 0.5 秒（并从新 A 播放）",
-    "aBBack": "B 点前移 0.5 秒",
-    "aBFwd": "B 点后移 0.5 秒（长按 1 秒清除 AB）",
+    "aABack": "A−：设 A 点；已设则前移 0.5 秒",
+    "aAFwd": "A+：设 A 点；已设则后移 0.5 秒",
+    "aBBack": "B−：设 B 点；已设则前移 0.5 秒",
+    "aBFwd": "B+：设 B 点；已设则后移 0.5 秒（长按 1 秒清除 AB）",
     "aSpeedCycle": "变速循环（0.5→0.75→1→1.25→1.5→2）"
   }
 }
