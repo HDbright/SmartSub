@@ -11,7 +11,13 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { Bluetooth, BluetoothConnected, BluetoothOff, X } from 'lucide-react';
+import {
+  Bluetooth,
+  BluetoothConnected,
+  BluetoothOff,
+  Play,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from 'lib/utils';
@@ -56,6 +62,9 @@ interface Props {
     charFragment: string,
   ) => RemoteDeviceEntry;
   onDeleteDevice: (id: string) => void;
+  /** 播放最近一次播放的媒体 */
+  onPlayLast?: () => void;
+  canPlayLast?: boolean;
 }
 
 const isModifierKey = (e: KeyboardEvent) =>
@@ -92,6 +101,8 @@ export default function RemoteMapDialog({
   onUseDevice,
   onAddDevice,
   onDeleteDevice,
+  onPlayLast,
+  canPlayLast,
 }: Props) {
   const { t } = useTranslation('repeat');
   const [capturing, setCapturing] = useState<string | null>(null);
@@ -287,6 +298,19 @@ export default function RemoteMapDialog({
                   : t('remote.bleOff')}
             </span>
             <span className="flex-1" />
+            {onPlayLast && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 gap-1 px-2 text-[11px]"
+                disabled={!canPlayLast}
+                title={t('remote.playLastTitle')}
+                onClick={onPlayLast}
+              >
+                <Play className="h-3 w-3" />
+                {t('remote.playLast')}
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"

@@ -355,6 +355,8 @@
     "aClearAB": "Clear AB marks",
     "aFavorite": "Favorite cue / add to review",
     "aShadow": "Shadow recording",
-    "aCompare": "Compare playback"
+    "aCompare": "Compare playback",
+    "playLast": "Play Last",
+    "playLastTitle": "Open and play the most recently played media"
   }
 }

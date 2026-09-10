@@ -1173,6 +1173,12 @@ export default function RepeatWorkbench({
     loadVideo(item.path, item.subtitlePath);
   };
 
+  /** 蓝牙面板「播放上次内容」：直接续播最近一次播放的媒体 */
+  const playLastMedia = () => {
+    const last = recents[0];
+    if (last) playRecent(last);
+  };
+
   const favoriteCurrent = () => {
     if (!videoPath) return;
     setLibrary(favoriteMedia(library, videoPath, libSelectedCatId).data);
@@ -3425,6 +3431,26 @@ export default function RepeatWorkbench({
             onClose={() => setPropertiesPath(null)}
           />
         )}
+        {remoteMapOpen && (
+          <RemoteMapDialog
+            open
+            onClose={() => setRemoteMapOpen(false)}
+            actions={REMOTE_ACTIONS}
+            map={remoteMap}
+            onChange={setRemoteMap}
+            bleStatus={bleStatus}
+            onBleToggle={toggleBleRemote}
+            bleMap={bleMap}
+            onBleMapChange={setBleMap}
+            devices={remoteDevices}
+            activeDeviceId={activeDevice ? activeDevice.id : ''}
+            onUseDevice={useDevice}
+            onAddDevice={addDevice}
+            onDeleteDevice={deleteDevice}
+            onPlayLast={playLastMedia}
+            canPlayLast={recents.length > 0}
+          />
+        )}
         {dragOverlay}
       </div>
     );
@@ -4395,6 +4421,8 @@ export default function RepeatWorkbench({
           onUseDevice={useDevice}
           onAddDevice={addDevice}
           onDeleteDevice={deleteDevice}
+          onPlayLast={playLastMedia}
+          canPlayLast={recents.length > 0}
         />
       )}
       {dragOverlay}

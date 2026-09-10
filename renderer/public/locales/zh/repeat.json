@@ -355,6 +355,8 @@
     "aClearAB": "取消 AB 标记",
     "aFavorite": "收藏句子 / 加入复习库",
     "aShadow": "跟读录音",
-    "aCompare": "原声对比"
+    "aCompare": "原声对比",
+    "playLast": "播放上次内容",
+    "playLastTitle": "直接打开并播放最近一次播放的媒体"
   }
 }
