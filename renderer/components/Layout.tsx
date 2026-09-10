@@ -838,7 +838,7 @@ const Layout = ({ children }) => {
               className={cn(
                 'titlebar-no-drag flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md transition-colors',
                 bleRemoteStatus === 'connected'
-                  ? 'text-success hover:bg-success/10'
+                  ? 'text-blue-500 hover:bg-blue-500/10'
                   : bleRemoteStatus === 'off'
                     ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
                     : 'animate-pulse text-warning hover:bg-warning/10',
