@@ -9,7 +9,8 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 import path from 'path';
-import { app, protocol, session } from 'electron';
+import * as fs from 'fs';
+import { app, protocol, session, ipcMain } from 'electron';
 import serve from 'electron-serve';
 import { createWindow } from './helpers/create-window';
 import { setupIpcHandlers } from './helpers/ipcHandlers';
@@ -196,6 +197,58 @@ app.on('before-quit', (event) => {
   setupRepeatLibraryDb();
   setupMediaMetaHandlers();
   setupBleRemoteHandlers();
+
+  // 复读模块调试日志：渲染层事件（手柄键码/AB 调整/跳转）落盘，便于问题追踪
+  {
+    const logPath = path.join(app.getPath('userData'), 'repeat-debug.log');
+    try {
+      if (fs.existsSync(logPath)) {
+        const st = fs.statSync(logPath);
+        if (st.size > 2 * 1024 * 1024) {
+          fs.renameSync(logPath, logPath + '.old');
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+    ipcMain.on('repeatDebug:log', (_e, msg: unknown) => {
+      try {
+        fs.appendFileSync(
+          logPath,
+          `${new Date().toISOString()} ${String(msg)}\n`,
+          'utf8',
+        );
+      } catch {
+        /* 忽略 */
+      }
+    });
+  }
+
+  // 复读模块调试日志：渲染层事件（手柄键码/AB 调整/跳转）落盘，便于问题追踪
+  {
+    const logPath = path.join(app.getPath('userData'), 'repeat-debug.log');
+    try {
+      if (fs.existsSync(logPath)) {
+        const st = fs.statSync(logPath);
+        if (st.size > 2 * 1024 * 1024) {
+          fs.renameSync(logPath, logPath + '.old');
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+    ipcMain.on('repeatDebug:log', (_e, msg: unknown) => {
+      try {
+        fs.appendFileSync(
+          logPath,
+          `${new Date().toISOString()} ${String(msg)}\n`,
+          'utf8',
+        );
+      } catch {
+        /* 忽略 */
+      }
+    });
+  }
 
   // 跟读录音需要麦克风：显式放行媒体权限请求
   session.defaultSession.setPermissionRequestHandler(

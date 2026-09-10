@@ -276,6 +276,20 @@ function buildPeaksFrom(ch: Float32Array, N: number): WavePeaks {
   return { min: mn, max: mx, n: N };
 }
 
+/** 调试日志：写入 userData/repeat-debug.log（主进程 appendFileSync） */
+const dbg = (...parts: unknown[]) => {
+  try {
+    window?.ipc?.send?.(
+      'repeatDebug:log',
+      parts
+        .map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x)))
+        .join(' '),
+    );
+  } catch {
+    /* 忽略 */
+  }
+};
+
 const basename = (p: string) =>
   p.slice(Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')) + 1);
 
@@ -1684,6 +1698,7 @@ export default function RepeatWorkbench({
   };
 
   const stopAb = (pauseAtB = false) => {
+    dbg('[stopAb]', { pauseAtB });
     const v = videoRef.current;
     abRef.current = { state: '', a: null, b: null, repeats: Infinity };
     syncAb();
@@ -1759,6 +1774,7 @@ export default function RepeatWorkbench({
     const v = videoRef.current;
     const ab = abRef.current;
     const a = Math.round((sec ?? (v ? v.currentTime : 0)) * 10) / 10;
+    dbg('[set-A]', { at: a, from: sec });
     stopQueue();
     ab.a = a;
     ab.b = null;
@@ -1772,6 +1788,7 @@ export default function RepeatWorkbench({
     const v = videoRef.current;
     const ab = abRef.current;
     const b = Math.round((sec ?? (v ? v.currentTime : 0)) * 10) / 10;
+    dbg('[set-B]', { at: b, from: sec });
     startAbLoop(ab.a, b);
   };
 
@@ -1818,6 +1835,7 @@ export default function RepeatWorkbench({
     const ab = abRef.current;
     const v = videoRef.current;
     const now = v ? v.currentTime : 0;
+    dbg('[adjust-in]', { which, delta, now, ab });
 
     if (which === 'b' && ab.a == null) {
       toast.warning(t('toast.setAFirst'));
@@ -1838,6 +1856,7 @@ export default function RepeatWorkbench({
       const aSafe = ab.b != null ? Math.min(a, ab.b - 0.3) : a;
       abRef.current = { ...ab, a: aSafe };
       syncAb();
+      dbg('[adjust-a]', { upper, aSafe });
       engineSeek(aSafe + 0.001);
       if (v && v.paused) void v.play().catch(() => {});
       toast.info(
@@ -1854,6 +1873,7 @@ export default function RepeatWorkbench({
       const bSafe = Math.max(b, lo);
       abRef.current = { ...ab, b: bSafe };
       syncAb();
+      dbg('[adjust-b]', { desired, lo, bSafe });
       // 播放头已越过新 B：立即从 A 重新开始循环（不等 timeupdate/间隔，避免观感卡顿后突跳）
       if (v && !v.seeking && v.currentTime >= bSafe - 0.02 && ab.a != null) {
         engineSeek(ab.a + 0.001);
@@ -2056,6 +2076,7 @@ export default function RepeatWorkbench({
   // 循环间隔等待：暂停 repeatGap 秒后从 target 位置继续
   const gapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gapPause = (target: number, cb?: () => void) => {
+    dbg('[gapPause]', { target, gap: repeatGap });
     const v = videoRef.current;
     if (!v || repeatGap <= 0) {
       engineSeek(target);
@@ -2661,10 +2682,20 @@ export default function RepeatWorkbench({
           return;
         }
         if (payload.type !== 'code' || !payload.value) return;
-        const runAction = (actionId: string) =>
-          remoteActionsRef.current.find((a) => a.id === actionId)?.run?.();
+        const runAction = (actionId: string) => {
+          const act = remoteActionsRef.current.find((a) => a.id === actionId);
+          dbg(
+            '[run]',
+            actionId,
+            act ? 'ok' : 'NOT-FOUND',
+            'ab=',
+            abRef.current,
+          );
+          act?.run?.();
+        };
         const code = payload.value;
         const nowMs = Date.now();
+        dbg('[ble]', code, 'ab=', abRef.current);
         if (code === '00') {
           // 松开帧：仅当按下时未执行过（延迟型长按）才补执行；已执行过则忽略
           const h = bleHoldRef.current;
