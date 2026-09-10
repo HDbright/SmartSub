@@ -6,9 +6,15 @@
  *
  * 实现方式：首次使用时用系统自带 csc.exe 把内嵌的 C# 桥接助手编译到
  * userData/ble-helper/BleBridge.exe（WinRT BLE API 在 Node 侧无原生绑定，
- * C# 走 Windows 自带投影，零额外依赖）。助手常驻：广播扫描定位手柄 →
- * Random 地址直连 → 订阅 FB01 → 把键码逐行打到 stdout；主进程解析后经
- * webContents 广播给渲染层（bleRemote:event），断链自动重试，进程退出自动重启。
+ * C# 走 Windows 自带投影，零额外依赖）。助手常驻：
+ *   断线重连策略（自愈）：
+ *   1) 先按「上次已知地址」直连多轮——配对设备被 Windows 自动重连后不再广播，
+ *      此时按地址直连仍可建立 GATT（无需广播）；
+ *   2) 直连失败再按名称扫描广播（应对地址轮换/首发现）；
+ *   3) 连接成功回发 ADDR 行，主进程持久化到 ble-helper/last-device.json，
+ *      助手进程意外退出重启后也能拿到地址；
+ *   4) 连接期间轮询 ConnectionStatus + 断链事件双保险，链路一断整套释放重试；
+ *   5) 每次会话结束 Dispose 旧设备对象，避免僵尸会话阻塞新连接。
  */
 
 import { app, ipcMain, BrowserWindow } from 'electron';
@@ -25,9 +31,11 @@ let restartTimer: NodeJS.Timeout | null = null;
 let lastStatus = 'off';
 let currentFilter = 'BHA';
 let currentChar = 'fb01';
-// 正在运行的会话参数（判断「同设备已在运行」）与代际（旧进程退出不触发重启）
+let lastAddr = ''; // 上次成功连接的设备地址（跨进程重启持久化）
+// 正在运行的会话参数（用于判断「同设备已在运行」）与代际（旧进程退出事件不再触发重启）
 let spawnedFilter = '';
 let spawnedChar = '';
+let spawnedAddr = '';
 let generation = 0;
 
 /** C# 桥接助手源码（ASCII only：csc 按本地代码页读源文件，非 ASCII 注释会被吞行） */
@@ -41,9 +49,9 @@ using Windows.Storage.Streams;
 
 class BleBridge
 {
-    static ulong target = 0;
     static string nameFilter = "BHA";
     static string charFragment = "fb01";
+    static string lastAddrHex = "";
 
     static T WaitOp<T>(Windows.Foundation.IAsyncOperation<T> op, int timeoutMs)
     {
@@ -78,7 +86,8 @@ class BleBridge
     {
         if (args.Length > 0 && args[0].Length > 0) nameFilter = args[0];
         if (args.Length > 1 && args[1].Length > 0) charFragment = args[1];
-        Emit("LOG boot filter=" + nameFilter + " char=" + charFragment);
+        if (args.Length > 2 && args[2].Length > 0) lastAddrHex = args[2];
+        Emit("LOG boot filter=" + nameFilter + " char=" + charFragment + " last=" + lastAddrHex);
         while (true)
         {
             try { RunSession(); }
@@ -88,18 +97,93 @@ class BleBridge
         }
     }
 
+    static ulong TryParseAddr(string hex)
+    {
+        ulong v;
+        if (hex != null && hex.Length > 0 &&
+            ulong.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out v))
+            return v;
+        return 0;
+    }
+
     static void RunSession()
     {
-        ulong addr = FindTarget(25000);
-        if (addr == 0) throw new Exception("target not in adverts");
-        Emit("LOG target " + addr.ToString("X12"));
-        var dev = WaitOp(BluetoothLEDevice.FromBluetoothAddressAsync(addr, BluetoothAddressType.Random), 15000);
-        if (dev == null) throw new Exception("device null");
-        ManualResetEvent lost = new ManualResetEvent(false);
-        dev.ConnectionStatusChanged += delegate(BluetoothLEDevice s, object e)
+        ulong known = TryParseAddr(lastAddrHex);
+
+        // 1) 按上次已知地址直连多轮：配对设备被 Windows 自动重连后不再广播，
+        //    此时广播扫描扫不到，但按地址直连仍可建立 GATT
+        if (known != 0)
         {
-            if (s.ConnectionStatus == BluetoothConnectionStatus.Disconnected) lost.Set();
+            for (int i = 1; i <= 3; i++)
+            {
+                Emit("LOG direct-connect try " + i);
+                BluetoothLEDevice dev = WaitOp(
+                    BluetoothLEDevice.FromBluetoothAddressAsync(known, BluetoothAddressType.Random),
+                    12000);
+                if (dev != null)
+                {
+                    Emit("ADDR " + dev.BluetoothAddress.ToString("X12"));
+                    try
+                    {
+                        Session(dev);
+                    }
+                    finally
+                    {
+                        try { dev.Dispose(); } catch { }
+                    }
+                    return;
+                }
+                Emit("LOG direct try " + i + " failed");
+                Thread.Sleep(2000);
+            }
+        }
+
+        // 2) 按名称扫描广播（覆盖地址轮换/首发现）
+        ulong scanned = FindTarget(20000);
+        if (scanned == 0) throw new Exception("target not in adverts");
+        Emit("ADDR " + scanned.ToString("X12"));
+        var dev2 = WaitOp(
+            BluetoothLEDevice.FromBluetoothAddressAsync(scanned, BluetoothAddressType.Random),
+            12000);
+        if (dev2 == null) throw new Exception("device null");
+        try
+        {
+            Session(dev2);
+        }
+        finally
+        {
+            try { dev2.Dispose(); } catch { }
+        }
+    }
+
+    static ulong FindTarget(int waitMs)
+    {
+        ManualResetEvent fnd = new ManualResetEvent(false);
+        ulong found = 0;
+        BluetoothLEAdvertisementWatcher w = new BluetoothLEAdvertisementWatcher();
+        w.ScanningMode = BluetoothLEScanningMode.Active;
+        w.Received += delegate(BluetoothLEAdvertisementWatcher s, BluetoothLEAdvertisementReceivedEventArgs e)
+        {
+            if (found != 0) return;
+            string nm = e.Advertisement.LocalName;
+            bool byName = nm != null && nm.Length > 0 &&
+                nm.IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+            bool byAddr = lastAddrHex.Length > 0 &&
+                e.BluetoothAddress.ToString("X12") == lastAddrHex;
+            if (byName || byAddr)
+            {
+                found = e.BluetoothAddress;
+                fnd.Set();
+            }
         };
+        w.Start();
+        fnd.WaitOne(waitMs);
+        w.Stop();
+        return found;
+    }
+
+    static void Session(BluetoothLEDevice dev)
+    {
         var svcRes = WaitOp(dev.GetGattServicesAsync(), 15000);
         if (svcRes.Status != GattCommunicationStatus.Success) throw new Exception("services " + svcRes.Status);
         GattCharacteristic button = null;
@@ -118,35 +202,34 @@ class BleBridge
         var st = WaitOp(button.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify), 8000);
         if (st != GattCommunicationStatus.Success) throw new Exception("subscribe " + st);
         Emit("STATUS connected");
+        ManualResetEvent lost = new ManualResetEvent(false);
+        dev.ConnectionStatusChanged += delegate(BluetoothLEDevice s, object e)
+        {
+            try
+            {
+                if (s.ConnectionStatus == BluetoothConnectionStatus.Disconnected) lost.Set();
+            }
+            catch { }
+        };
         button.ValueChanged += delegate(GattCharacteristic s2, GattValueChangedEventArgs e2)
         {
-            byte[] b = ToBytes(e2.CharacteristicValue);
-            if (b.Length == 1) Emit("CODE " + b[0].ToString("X2"));
-            else Emit("CODE " + BitConverter.ToString(b));
-        };
-        while (!lost.WaitOne(2000)) { }
-        throw new Exception("link lost");
-    }
-
-    static ulong FindTarget(int waitMs)
-    {
-        if (target != 0) return target;
-        ManualResetEvent fnd = new ManualResetEvent(false);
-        BluetoothLEAdvertisementWatcher w = new BluetoothLEAdvertisementWatcher();
-        w.ScanningMode = BluetoothLEScanningMode.Active;
-        w.Received += delegate(BluetoothLEAdvertisementWatcher s, BluetoothLEAdvertisementReceivedEventArgs e)
-        {
-            string nm = e.Advertisement.LocalName;
-            if (nm != null && nm.Length > 0 && nm.IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+            try
             {
-                target = e.BluetoothAddress;
-                fnd.Set();
+                byte[] b = ToBytes(e2.CharacteristicValue);
+                if (b.Length == 1) Emit("CODE " + b[0].ToString("X2"));
+                else Emit("CODE " + BitConverter.ToString(b));
             }
+            catch { }
         };
-        w.Start();
-        fnd.WaitOne(waitMs);
-        w.Stop();
-        return target;
+        // 链路健康双保险：断链事件 + 轮询 ConnectionStatus
+        while (!lost.WaitOne(2000))
+        {
+            if (dev.ConnectionStatus == BluetoothConnectionStatus.Disconnected)
+            {
+                lost.Set();
+            }
+        }
+        throw new Exception("link lost");
     }
 }
 `;
@@ -156,6 +239,32 @@ function helperDir(): string {
 }
 function helperExe(): string {
   return path.join(helperDir(), 'BleBridge.exe');
+}
+function lastDeviceFile(): string {
+  return path.join(helperDir(), 'last-device.json');
+}
+
+/** 读取上次成功连接的设备信息（跨主进程重启持久化） */
+function readLastDevice(): { addr?: string; filter?: string; char?: string } {
+  try {
+    return JSON.parse(fs.readFileSync(lastDeviceFile(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeLastDevice(patch: {
+  addr?: string;
+  filter?: string;
+  char?: string;
+}) {
+  try {
+    fs.mkdirSync(helperDir(), { recursive: true });
+    const merged = { ...readLastDevice(), ...patch };
+    fs.writeFileSync(lastDeviceFile(), JSON.stringify(merged), 'utf8');
+  } catch {
+    /* 忽略 */
+  }
 }
 
 function broadcast(type: string, value: string) {
@@ -170,10 +279,13 @@ function broadcast(type: string, value: string) {
 
 /** 首次使用时编译内嵌 C# 助手（系统自带 csc，无需 SDK） */
 function ensureHelper(): boolean {
-  if (fs.existsSync(helperExe())) return true;
   try {
     fs.mkdirSync(helperDir(), { recursive: true });
     const cs = path.join(helperDir(), 'BleBridge.cs');
+    // 源码变更检测：CS 源更新后强制重编译，避免旧 exe 一直被复用
+    const csStale =
+      !fs.existsSync(cs) || fs.readFileSync(cs, 'utf8') !== CS_SOURCE;
+    if (fs.existsSync(helperExe()) && !csStale) return true;
     fs.writeFileSync(cs, CS_SOURCE, 'utf8');
 
     const windir = process.env.windir || path.join('C:', 'Windows');
@@ -245,8 +357,9 @@ function spawnHelper() {
   const myGen = ++generation;
   spawnedFilter = currentFilter;
   spawnedChar = currentChar;
+  spawnedAddr = lastAddr;
   try {
-    child = spawn(helperExe(), [currentFilter, currentChar], {
+    child = spawn(helperExe(), [currentFilter, currentChar, lastAddr], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -269,6 +382,13 @@ function spawnHelper() {
       } else if (line.startsWith('STATUS ')) {
         lastStatus = line.slice(7);
         broadcast('status', lastStatus);
+      } else if (line.startsWith('ADDR ')) {
+        lastAddr = line.slice(5);
+        writeLastDevice({
+          addr: lastAddr,
+          filter: currentFilter,
+          char: currentChar,
+        });
       } else if (line.startsWith('LOG ')) {
         logMessage(`BLE 桥接：${line.slice(4)}`, 'info');
       }
@@ -305,12 +425,21 @@ function startHelper(
   if (!ensureHelper()) return { success: false, error: 'compile failed' };
   wanted = true;
   if (child) {
-    if (spawnedFilter === currentFilter && spawnedChar === currentChar) {
+    if (
+      spawnedFilter === currentFilter &&
+      spawnedChar === currentChar &&
+      spawnedAddr === lastAddr
+    ) {
       return { success: true };
     }
     // 切换设备：终止旧进程（其 exit 回调因代际不匹配被忽略）
     child.kill();
     child = null;
+  }
+  // 内存中没有地址时，恢复上次成功连接的设备地址
+  if (!lastAddr) {
+    const last = readLastDevice();
+    if (last.addr) lastAddr = last.addr;
   }
   spawnHelper();
   return { success: true };
