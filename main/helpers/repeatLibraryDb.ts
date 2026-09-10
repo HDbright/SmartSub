@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { logMessage } from './storeManager';
+import { logMessage, store } from './storeManager';
 
 /**
  * 复读页媒体库 / 播放列表 / 最近播放的 SQLite 持久化（sql.js，纯 WASM，无需本地编译）。
@@ -140,12 +140,66 @@ function persist() {
   fs.writeFileSync(dbFile, Buffer.from(data));
 }
 
+/** 数据库文件位置：跟随「统一存储位置」设置（settings.storageRoot），不可用时回退 userData */
+function resolveDbFile(): string {
+  const fallback = path.join(app.getPath('userData'), 'repeat-library.sqlite3');
+  try {
+    const root: string =
+      ((store.get('settings') as any)?.storageRoot as string)?.trim() || '';
+    if (!root) return fallback;
+    fs.mkdirSync(root, { recursive: true });
+    return path.join(root, 'repeat-library.sqlite3');
+  } catch {
+    return fallback;
+  }
+}
+
 async function getDb(): Promise<any> {
-  if (db) return db;
+  const file = resolveDbFile();
+  // 已打开且路径未变：直接复用
+  if (db && dbFile === file) return db;
+
   const SQL = await initSqlJs({
     wasmBinary: fs.readFileSync(resolveWasmPath()),
   });
-  dbFile = path.join(app.getPath('userData'), 'repeat-library.sqlite3');
+
+  // 存储位置变更（会话中改设置 / 设置指向新目录）：
+  // 先把当前库写回旧位置，作为迁移源
+  let migrateFrom = path.join(
+    app.getPath('userData'),
+    'repeat-library.sqlite3',
+  );
+  if (db) {
+    try {
+      persist();
+    } catch {
+      /* 忽略 */
+    }
+    migrateFrom = dbFile;
+    db = null;
+    sessionLoadFailed = false; // 新位置给一次全新载入机会
+  }
+
+  // 目标位置尚无库文件：从旧位置迁移（优先当前库，其次 userData 历史库）
+  if (!fs.existsSync(file)) {
+    for (const src of [
+      migrateFrom,
+      path.join(app.getPath('userData'), 'repeat-library.sqlite3'),
+    ]) {
+      try {
+        if (src && src !== file && fs.existsSync(src)) {
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.copyFileSync(src, file);
+          logMessage(`复读媒体库已迁移: ${src} -> ${file}`, 'info');
+          break;
+        }
+      } catch {
+        /* 迁移失败则按新库处理 */
+      }
+    }
+  }
+
+  dbFile = file;
   // 每次会话首次打开前留一份启动备份：任何后续覆盖事故都可从 .bak 恢复
   try {
     if (fs.existsSync(dbFile) && fs.statSync(dbFile).size > 0) {
