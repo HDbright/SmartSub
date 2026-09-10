@@ -2470,6 +2470,12 @@ export default function RepeatWorkbench({
   // BLE 手柄事件用 ref 读最新映射/动作（事件回调挂载一次）
   const bleMapRef = useRef(bleMap);
   bleMapRef.current = bleMap;
+  // BLE 手柄长按判定：按住的键码/动作/计时器（松开帧 '00' 无按键身份，记录最后按下的键）
+  const bleHoldRef = useRef<{
+    code: string;
+    actionId: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   const remoteActionsRef = useRef(REMOTE_ACTIONS);
   remoteActionsRef.current = REMOTE_ACTIONS;
 
@@ -2562,16 +2568,42 @@ export default function RepeatWorkbench({
           if (payload.value === 'connected') touchActiveDevice();
           return;
         }
-        // '00' 为松开帧，忽略；仅处理按下键码
-        if (
-          payload.type === 'code' &&
-          payload.value &&
-          payload.value !== '00'
-        ) {
-          const actionId = bleMapRef.current[payload.value];
-          if (!actionId) return;
+        if (payload.type !== 'code' || !payload.value) return;
+        const runAction = (actionId: string) =>
           remoteActionsRef.current.find((a) => a.id === actionId)?.run?.();
+        if (payload.value === '00') {
+          // 松开帧：长按未达阈值 → 执行常规动作；已达阈值（长按已触发）→ 不再执行
+          const h = bleHoldRef.current;
+          if (h) {
+            if (h.timer) clearTimeout(h.timer);
+            bleHoldRef.current = null;
+            runAction(h.actionId);
+          }
+          return;
         }
+        // 按下帧：上一键仍在长按判定中又被新键按下 → 取消判定并执行原动作
+        if (bleHoldRef.current) {
+          const h = bleHoldRef.current;
+          if (h.timer) clearTimeout(h.timer);
+          bleHoldRef.current = null;
+          runAction(h.actionId);
+        }
+        const actionId = bleMapRef.current[payload.value];
+        if (!actionId) return;
+        // AB 循环激活时长按 B 点键 2 秒 → 清除 A/B 复读点
+        if (actionId === 'setB' && abRef.current.b != null) {
+          bleHoldRef.current = {
+            code: payload.value,
+            actionId,
+            timer: setTimeout(() => {
+              bleHoldRef.current = null;
+              stopAb();
+              toast.success(t('toast.abCleared'));
+            }, 2000),
+          };
+          return;
+        }
+        runAction(actionId);
       },
     );
     // 挂载即启动桥接：助手内部自动扫描重连，手柄唤醒后即可用，且无需窗口聚焦
