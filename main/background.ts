@@ -30,6 +30,7 @@ import { setupWindowCloseBehavior, markQuitting } from './helpers/windowClose';
 import { setupParameterHandlers } from './helpers/ipcParameterHandlers';
 import { setupRepeatLibraryDb } from './helpers/repeatLibraryDb';
 import { setupMediaMetaHandlers } from './helpers/mediaMeta';
+import { setupBleRemoteHandlers } from './helpers/bleRemote';
 import { setupProofreadHandlers } from './helpers/ipcProofreadHandlers';
 import { setupSubtitleMergeHandlers } from './helpers/ipcSubtitleMergeHandlers';
 import { setupDubbingHandlers } from './helpers/ipcDubbingHandlers';
@@ -194,6 +195,7 @@ app.on('before-quit', (event) => {
   setupParameterHandlers();
   setupRepeatLibraryDb();
   setupMediaMetaHandlers();
+  setupBleRemoteHandlers();
   setupProofreadHandlers();
   registerAddonIpcHandlers();
 

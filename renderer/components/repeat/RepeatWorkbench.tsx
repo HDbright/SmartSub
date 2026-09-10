@@ -43,6 +43,7 @@ import {
   Square,
   Star,
   Trash2,
+  Gamepad2,
   Video,
   WrapText,
   X,
@@ -75,6 +76,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { useHotkeys } from 'hooks/useHotkeys';
 import SubtitlePreviewOverlay from '@/components/subtitleMerge/SubtitlePreviewOverlay';
 import InteractiveSubtitleOverlay from './InteractiveSubtitleOverlay';
+import RemoteMapDialog, { type RemoteActionDef } from './RemoteMapDialog';
 import {
   LIBASS_SRT_PLAYRES_Y,
   subtitleStyleToCSS,
@@ -167,6 +169,19 @@ const SUBTITLE_EXTS = ['srt', 'vtt', 'ass', 'ssa', 'lrc'];
 
 const REPEAT_CFG_KEY = 'repeatPlaybackCfg';
 
+/**
+ * 蓝牙复读手柄（HID 媒体键）的默认映射：键为 useHotkeys 组合格式（小写）。
+ * BHA01 等手柄配对后发媒体键/键盘键，用户可在「手柄按键映射」对话框重绑。
+ */
+const DEFAULT_REMOTE_MAP: Record<string, string> = {
+  mediaplaypause: 'playPause',
+  mediatrackprevious: 'prevCue',
+  mediatracknext: 'nextCue',
+  mediarewind: 'frameBack',
+  mediafastforward: 'frameFwd',
+  mediastop: 'stop',
+};
+
 function loadPersistedCfg(): {
   rate?: number;
   loopMode?: LoopMode;
@@ -179,6 +194,8 @@ function loadPersistedCfg(): {
   repeatGap?: number;
   subtitleStyle?: SubtitleStyle;
   nameMode?: MediaNameMode;
+  remoteMap?: Record<string, string>;
+  bleMap?: Record<string, string>;
 } {
   try {
     return JSON.parse(localStorage.getItem(REPEAT_CFG_KEY) || '{}');
@@ -435,6 +452,17 @@ export default function RepeatWorkbench({
   const [nameMode, setNameMode] = useState<MediaNameMode>(
     () => loadPersistedCfg().nameMode ?? 'custom',
   );
+  // 手柄/遥控按键映射（默认覆盖常见媒体键，可在映射对话框重绑）
+  const [remoteMap, setRemoteMap] = useState<Record<string, string>>(() => ({
+    ...DEFAULT_REMOTE_MAP,
+    ...loadPersistedCfg().remoteMap,
+  }));
+  const [remoteMapOpen, setRemoteMapOpen] = useState(false);
+  // 蓝牙手柄 BLE 直连：键码(如 '21') -> 动作 id；桥接状态
+  const [bleMap, setBleMap] = useState<Record<string, string>>(
+    () => loadPersistedCfg().bleMap || {},
+  );
+  const [bleStatus, setBleStatus] = useState('off');
 
   useEffect(() => {
     singleRepeatRef.current = singleRepeat;
@@ -457,6 +485,8 @@ export default function RepeatWorkbench({
           repeatGap,
           subtitleStyle,
           nameMode,
+          remoteMap,
+          bleMap,
         }),
       );
     } catch {
@@ -473,6 +503,8 @@ export default function RepeatWorkbench({
     showSubtitle,
     repeatGap,
     nameMode,
+    remoteMap,
+    bleMap,
   ]);
 
   // 全屏状态同步（Esc 退出时复位按钮态）
@@ -649,6 +681,12 @@ export default function RepeatWorkbench({
             label: t('vmenu.nextFrame'),
             icon: ChevronRight,
             onSelect: () => stepFrame(1),
+          },
+          {
+            key: 'remote-map',
+            label: t('remote.map'),
+            icon: Gamepad2,
+            onSelect: () => setTimeout(() => setRemoteMapOpen(true), 0),
           },
         ],
       },
@@ -2069,6 +2107,130 @@ export default function RepeatWorkbench({
   };
 
   // ---------- 快捷键（仅复读页可见时生效；保活挂载下切页后自动失能） ----------
+  // ---------- 手柄/遥控动作注册（映射对话框 + 快捷键共用） ----------
+  const REMOTE_ACTIONS: RemoteActionDef[] = [
+    { id: 'playPause', label: t('remote.aPlayPause'), run: () => togglePlay() },
+    { id: 'prevCue', label: t('remote.aPrevCue'), run: () => locateCue(-1) },
+    { id: 'nextCue', label: t('remote.aNextCue'), run: () => locateCue(1) },
+    {
+      id: 'frameBack',
+      label: t('remote.aFrameBack'),
+      run: () => stepFrame(-1),
+    },
+    { id: 'frameFwd', label: t('remote.aFrameFwd'), run: () => stepFrame(1) },
+    {
+      id: 'seekBack',
+      label: t('remote.aSeekBack'),
+      run: () => seekTo(currentTime - 5),
+    },
+    {
+      id: 'seekFwd',
+      label: t('remote.aSeekFwd'),
+      run: () => seekTo(currentTime + 5),
+    },
+    { id: 'setA', label: t('remote.aSetA'), run: () => setPointA() },
+    {
+      id: 'setB',
+      label: t('remote.aSetB'),
+      run: () => (abRef.current.state === 'pickB' ? setPointB() : setPointA()),
+    },
+    {
+      id: 'speedUp',
+      label: t('remote.aSpeedUp'),
+      run: () =>
+        setRate(
+          RATE_OPTIONS[
+            Math.min(RATE_OPTIONS.indexOf(rate) + 1, RATE_OPTIONS.length - 1)
+          ],
+        ),
+    },
+    {
+      id: 'speedDown',
+      label: t('remote.aSpeedDown'),
+      run: () =>
+        setRate(RATE_OPTIONS[Math.max(RATE_OPTIONS.indexOf(rate) - 1, 0)]),
+    },
+    {
+      id: 'singleRepeat',
+      label: t('remote.aSingleRepeat'),
+      run: () => setSingleRepeat((v) => !v),
+    },
+    { id: 'stop', label: t('remote.aStop'), run: () => stopAll() },
+    {
+      id: 'screenshot',
+      label: t('remote.aScreenshot'),
+      run: () => captureFrame(),
+    },
+  ];
+
+  // BLE 手柄事件用 ref 读最新映射/动作（事件回调挂载一次）
+  const bleMapRef = useRef(bleMap);
+  bleMapRef.current = bleMap;
+  const remoteActionsRef = useRef(REMOTE_ACTIONS);
+  remoteActionsRef.current = REMOTE_ACTIONS;
+
+  const toggleBleRemote = () => {
+    if (bleStatus === 'off') {
+      void window?.ipc?.invoke('bleRemote:start', { name: 'BHA' });
+    } else {
+      void window?.ipc?.invoke('bleRemote:stop', {});
+    }
+  };
+
+  // ---------- 蓝牙手柄（BLE 私有协议直连桥）：键码 -> 复读动作 ----------
+  useEffect(() => {
+    const off = window?.ipc?.on?.(
+      'bleRemote:event',
+      (payload: { type: string; value: string }) => {
+        if (!payload) return;
+        if (payload.type === 'status') {
+          setBleStatus(payload.value);
+          return;
+        }
+        // '00' 为松开帧，忽略；仅处理按下键码
+        if (
+          payload.type === 'code' &&
+          payload.value &&
+          payload.value !== '00'
+        ) {
+          const actionId = bleMapRef.current[payload.value];
+          if (!actionId) return;
+          remoteActionsRef.current.find((a) => a.id === actionId)?.run?.();
+        }
+      },
+    );
+    // 挂载即启动桥接：助手内部自动扫描重连，手柄唤醒后即可用，且无需窗口聚焦
+    void window?.ipc
+      ?.invoke('bleRemote:start', { name: 'BHA' })
+      .catch(() => {});
+    return () => {
+      off?.();
+      void window?.ipc?.invoke('bleRemote:stop', {}).catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const remoteBindings = useMemo(
+    () =>
+      Object.entries(remoteMap)
+        .map(([combo, actionId]) => {
+          const act = REMOTE_ACTIONS.find((a) => a.id === actionId);
+          if (!act) return null;
+          return {
+            combo,
+            allowInInput: true,
+            handler: () => act.run(),
+          };
+        })
+        .filter(Boolean) as {
+        combo: string;
+        allowInInput: boolean;
+        handler: () => void;
+      }[],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [remoteMap, currentTime, rate],
+  );
+
   useHotkeys(
     active
       ? [
@@ -2102,6 +2264,7 @@ export default function RepeatWorkbench({
               }
             },
           },
+          ...remoteBindings,
         ]
       : [],
   );
@@ -3897,6 +4060,19 @@ export default function RepeatWorkbench({
           open={!!propertiesPath}
           filePath={propertiesPath}
           onClose={() => setPropertiesPath(null)}
+        />
+      )}
+      {remoteMapOpen && (
+        <RemoteMapDialog
+          open
+          onClose={() => setRemoteMapOpen(false)}
+          actions={REMOTE_ACTIONS}
+          map={remoteMap}
+          onChange={setRemoteMap}
+          bleStatus={bleStatus}
+          onBleToggle={toggleBleRemote}
+          bleMap={bleMap}
+          onBleMapChange={setBleMap}
         />
       )}
       {dragOverlay}
