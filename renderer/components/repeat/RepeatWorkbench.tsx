@@ -2141,6 +2141,188 @@ export default function RepeatWorkbench({
   };
 
   // ---------- 快捷键（仅复读页可见时生效；保活挂载下切页后自动失能） ----------
+  // ---------- 跟读录音 + 原声对比 ----------
+  // 跟读键：播放当前句 → 句尾自动暂停并开始录音 → 再按结束录音；
+  // 对比键：原声与跟读录音轮流循环播放，再按停止。
+  type ShadowPhase = 'idle' | 'orig' | 'rec' | 'cmp-orig' | 'cmp-rec';
+  const [shadowPhase, setShadowPhase] = useState<ShadowPhase>('idle');
+  const shadowPhaseRef = useRef<ShadowPhase>('idle');
+  const setPhase = (ph: ShadowPhase) => {
+    shadowPhaseRef.current = ph;
+    setShadowPhase(ph);
+  };
+  const shadowCueRef = useRef<{ start: number; end: number } | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const shadowUrlRef = useRef<string | null>(null);
+  const shadowAudioRef = useRef<HTMLAudioElement | null>(null);
+  const compareRef = useRef(false);
+  const shadowTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopShadowWatcher = () => {
+    if (shadowTimerRef.current) {
+      clearInterval(shadowTimerRef.current);
+      shadowTimerRef.current = null;
+    }
+  };
+
+  const playOrigSegment = (start: number, end: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    shadowCueRef.current = { start, end };
+    engineSeek(start + 0.001);
+    void v.play().catch(() => {});
+  };
+
+  const startShadowWatcher = () => {
+    stopShadowWatcher();
+    shadowTimerRef.current = setInterval(() => {
+      const ph = shadowPhaseRef.current;
+      if (ph !== 'orig' && ph !== 'cmp-orig') return;
+      const v = videoRef.current;
+      const cue = shadowCueRef.current;
+      if (!v || !cue) return;
+      // 原句播放到句尾（或被暂停）→ 进入下一阶段
+      if (v.currentTime >= cue.end - 0.02 || v.paused) {
+        v.pause();
+        if (ph === 'orig') {
+          void startShadowRecording();
+        } else {
+          playShadowRecording();
+        }
+      }
+    }, 80);
+  };
+
+  const startShadowRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      recChunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size) recChunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recChunksRef.current, {
+          type: rec.mimeType || 'audio/webm',
+        });
+        if (shadowUrlRef.current) URL.revokeObjectURL(shadowUrlRef.current);
+        shadowUrlRef.current = URL.createObjectURL(blob);
+        shadowAudioRef.current = null; // 下次对比时按新录音重建
+        toast.success(t('toast.shadowSaved'));
+      };
+      rec.start();
+      recorderRef.current = rec;
+      setPhase('rec');
+      toast.info(t('toast.shadowRecording'));
+    } catch (e) {
+      toast.error(t('toast.micError', { err: String(e).slice(0, 90) }));
+      setPhase('idle');
+    }
+  };
+
+  const stopShadowRecording = () => {
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') rec.stop();
+    recorderRef.current = null;
+    stopShadowWatcher();
+    setPhase('idle');
+  };
+
+  const playShadowRecording = () => {
+    if (!shadowUrlRef.current) {
+      compareRef.current = false;
+      stopShadowWatcher();
+      setPhase('idle');
+      toast.warning(t('toast.compareNeedRec'));
+      return;
+    }
+    if (!shadowAudioRef.current) {
+      const a = new Audio(shadowUrlRef.current);
+      a.onended = () => {
+        if (compareRef.current && shadowCueRef.current) {
+          playOrigSegment(shadowCueRef.current.start, shadowCueRef.current.end);
+        } else {
+          setPhase('idle');
+        }
+      };
+      shadowAudioRef.current = a;
+    }
+    const a = shadowAudioRef.current;
+    a.currentTime = 0;
+    void a.play().catch(() => {});
+    setPhase('cmp-rec');
+  };
+
+  /** 手柄键：跟读录音（播放原句→句尾自动录音→再按结束） */
+  const toggleShadow = () => {
+    if (shadowPhaseRef.current === 'rec') {
+      stopShadowRecording();
+      return;
+    }
+    if (shadowPhaseRef.current !== 'idle') {
+      // 流程被打断（对比中/原句播放中）：先复位
+      compareRef.current = false;
+      shadowAudioRef.current?.pause();
+      stopShadowWatcher();
+      setPhase('idle');
+    }
+    const i = activeCueIndex;
+    if (i < 0 || !cues[i]) {
+      toast.warning(t('toast.shadowNeedCue'));
+      return;
+    }
+    if (singleRepeatRef.current) setSingleRepeat(false);
+    stopAll();
+    compareRef.current = false;
+    const cue = {
+      start: cues[i].start,
+      end: Math.max(cues[i].end, cues[i].start + 0.3),
+    };
+    playOrigSegment(cue.start, cue.end);
+    setPhase('orig');
+    startShadowWatcher();
+    toast.info(t('toast.shadowStart'));
+  };
+
+  /** 手柄键：原声 ↔ 跟读录音轮流对比播放（再按停止） */
+  const toggleCompare = () => {
+    if (compareRef.current) {
+      compareRef.current = false;
+      shadowAudioRef.current?.pause();
+      stopShadowWatcher();
+      setPhase('idle');
+      return;
+    }
+    if (!shadowUrlRef.current) {
+      toast.warning(t('toast.compareNeedRec'));
+      return;
+    }
+    if (singleRepeatRef.current) setSingleRepeat(false);
+    stopAll();
+    const cue =
+      shadowCueRef.current ??
+      (activeCueIndex >= 0 && cues[activeCueIndex]
+        ? {
+            start: cues[activeCueIndex].start,
+            end: Math.max(
+              cues[activeCueIndex].end,
+              cues[activeCueIndex].start + 0.3,
+            ),
+          }
+        : null);
+    if (!cue) {
+      toast.warning(t('toast.shadowNeedCue'));
+      return;
+    }
+    compareRef.current = true;
+    playOrigSegment(cue.start, cue.end);
+    setPhase('cmp-orig');
+    startShadowWatcher();
+    toast.info(t('toast.compareStart'));
+  };
+
   // ---------- 手柄/遥控动作注册（映射对话框 + 快捷键共用） ----------
   const REMOTE_ACTIONS: RemoteActionDef[] = [
     { id: 'playPause', label: t('remote.aPlayPause'), run: () => togglePlay() },
@@ -2167,6 +2349,31 @@ export default function RepeatWorkbench({
       id: 'setB',
       label: t('remote.aSetB'),
       run: () => (abRef.current.state === 'pickB' ? setPointB() : setPointA()),
+    },
+    {
+      id: 'clearAB',
+      label: t('remote.aClearAB'),
+      run: () => {
+        stopAb();
+        toast.success(t('toast.abCleared'));
+      },
+    },
+    {
+      id: 'favorite',
+      label: t('remote.aFavorite'),
+      run: () => {
+        if (activeCueIndex >= 0) favoriteCues([activeCueIndex]);
+      },
+    },
+    {
+      id: 'shadow',
+      label: t('remote.aShadow'),
+      run: () => toggleShadow(),
+    },
+    {
+      id: 'compare',
+      label: t('remote.aCompare'),
+      run: () => toggleCompare(),
     },
     {
       id: 'speedUp',

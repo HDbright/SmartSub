@@ -73,7 +73,15 @@
     "videoError": "Failed to load video, please choose another file",
     "waveAnalyzing": "Analyzing audio waveform…",
     "waveFailed": "Waveform analysis failed; showing a placeholder",
-    "needVideoFirst": "Load a video before importing a subtitle file"
+    "needVideoFirst": "Load a video before importing a subtitle file",
+    "shadowStart": "Shadow mode: playing original, recording starts at sentence end",
+    "shadowRecording": "● Recording… press the shadow key again to stop",
+    "shadowSaved": "Recording saved — press \"Compare\" to compare",
+    "compareStart": "Compare: original ↔ recording alternating (press compare again to stop)",
+    "compareNeedRec": "No recording yet — press \"Shadow recording\" first",
+    "shadowNeedCue": "Locate playback at a cue first",
+    "micError": "Microphone unavailable: {{err}}",
+    "abCleared": "AB marks cleared"
   },
   "toggleWave": "Show/hide waveform",
   "toggleList": "Show/hide subtitle panel",
@@ -343,6 +351,10 @@
     "deviceLabel": "Device name",
     "deviceFilter": "Name keyword",
     "deviceChar": "Button channel UUID fragment (default fb01)",
-    "deviceLast": "Last connected"
+    "deviceLast": "Last connected",
+    "aClearAB": "Clear AB marks",
+    "aFavorite": "Favorite cue / add to review",
+    "aShadow": "Shadow recording",
+    "aCompare": "Compare playback"
   }
 }

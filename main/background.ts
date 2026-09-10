@@ -9,7 +9,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 import path from 'path';
-import { app, protocol } from 'electron';
+import { app, protocol, session } from 'electron';
 import serve from 'electron-serve';
 import { createWindow } from './helpers/create-window';
 import { setupIpcHandlers } from './helpers/ipcHandlers';
@@ -196,6 +196,13 @@ app.on('before-quit', (event) => {
   setupRepeatLibraryDb();
   setupMediaMetaHandlers();
   setupBleRemoteHandlers();
+
+  // 跟读录音需要麦克风：显式放行媒体权限请求
+  session.defaultSession.setPermissionRequestHandler(
+    (_wc, permission, callback) => {
+      callback(permission === 'media');
+    },
+  );
   setupProofreadHandlers();
   registerAddonIpcHandlers();
 

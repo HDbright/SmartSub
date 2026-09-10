@@ -73,7 +73,15 @@
     "videoError": "视频加载失败，请重新选择文件",
     "waveAnalyzing": "正在分析音频波形…",
     "waveFailed": "音频波形分析失败，当前为示意波形",
-    "needVideoFirst": "请先载入视频，再导入字幕文件"
+    "needVideoFirst": "请先载入视频，再导入字幕文件",
+    "shadowStart": "跟读模式：播放原句，句尾自动暂停并开始录音",
+    "shadowRecording": "● 跟读录音中…（再按跟读键结束）",
+    "shadowSaved": "跟读录音已保存，可按「原声对比」键对比",
+    "compareStart": "对比播放：原声 ↔ 跟读轮流（再按对比键停止）",
+    "compareNeedRec": "暂无跟读录音，请先按「跟读录音」键录制",
+    "shadowNeedCue": "请先将播放定位到某一句再跟读",
+    "micError": "麦克风不可用：{{err}}",
+    "abCleared": "已取消 AB 标记"
   },
   "toggleWave": "显示/隐藏波形条",
   "toggleList": "显示/隐藏字幕列表",
@@ -343,6 +351,10 @@
     "deviceLabel": "设备名称",
     "deviceFilter": "名称匹配关键字",
     "deviceChar": "按键通道 UUID 片段（默认 fb01）",
-    "deviceLast": "上次连接"
+    "deviceLast": "上次连接",
+    "aClearAB": "取消 AB 标记",
+    "aFavorite": "收藏句子 / 加入复习库",
+    "aShadow": "跟读录音",
+    "aCompare": "原声对比"
   }
 }
