@@ -453,7 +453,9 @@ export default function RemoteMapDialog({
                 key={a.id}
                 className="flex flex-wrap items-center gap-1.5 rounded px-1 py-1 text-xs hover:bg-accent/50"
               >
-                <span className="min-w-0 flex-1 truncate">{a.label}</span>
+                <span className="min-w-0 flex-1 truncate" title={a.label}>
+                  {a.label}
+                </span>
                 {/* 键盘绑定 */}
                 {isCapturing ? (
                   <span className="animate-pulse text-[11px] text-primary">
