@@ -1,23 +1,19 @@
 /**
- * 手柄/遥控按键映射对话框（键盘 + 蓝牙 BLE 手柄两部分）。
+ * 手柄/遥控按键映射浮动面板（键盘 + 蓝牙 BLE 手柄两部分）。
+ *
+ * 自绘可拖拽面板（非 Radix Dialog）：无遮罩、不锁页面滚动，复读页面保持清晰
+ * 可交互，方便对照画面/列表设置映射；标题栏按住拖动移动位置。
  *
  * 键盘部分：蓝牙 HID 类手柄或键盘按键 → useHotkeys 组合格式（repeatPlaybackCfg.remoteMap）。
  * BLE 部分：私有协议蓝牙复读手柄（如艺漫新 BHA02）经主进程 bleRemote 桥直连，
  * 按键为 1 字节键码（按下 0x20..，松开 0x00）→ repeatPlaybackCfg.bleMap。
- * 顶部监视区实时显示收到的键码，点「绑定」后按下手柄按键即可完成映射。
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { Bluetooth, BluetoothConnected, BluetoothOff } from 'lucide-react';
+import { Bluetooth, BluetoothConnected, BluetoothOff, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { cn } from 'lib/utils';
 
 export interface RemoteActionDef {
@@ -113,6 +109,46 @@ export default function RemoteMapDialog({
   const capturingBleRef = useRef<string | null>(null);
   capturingBleRef.current = capturingBle;
 
+  // ---- 浮动面板拖拽（标题栏按住拖动）----
+  const [pos, setPos] = useState(() => ({
+    x: Math.max(
+      16,
+      (typeof window !== 'undefined' ? window.innerWidth : 1200) - 560,
+    ),
+    y: 56,
+  }));
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    dragRef.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setPos({
+      x: Math.min(
+        Math.max(e.clientX - d.dx, 8),
+        Math.max(8, window.innerWidth - 160),
+      ),
+      y: Math.min(Math.max(e.clientY - d.dy, 8), window.innerHeight - 60),
+    });
+  };
+  const onDragEnd = () => {
+    dragRef.current = null;
+  };
+
+  // Esc 关闭面板（捕获进行中的按键由各自监听优先拦截）
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !capturing && !capturingBle) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, capturing, capturingBle, onClose]);
+
   // 监视：仅记录最后按下的键（用于确认手柄/键盘按键的实际键码）
   useEffect(() => {
     if (!open) return;
@@ -169,6 +205,8 @@ export default function RemoteMapDialog({
     // bleMap/onBleMapChange 变化会重挂监听，闭包保持新鲜
   }, [open, bleMap, onBleMapChange]);
 
+  if (!open) return null;
+
   const keyOf = (actionId: string) =>
     Object.keys(map).find((k) => map[k] === actionId);
   const bleCodeOf = (actionId: string) =>
@@ -193,11 +231,30 @@ export default function RemoteMapDialog({
   const bleRunning = bleStatus !== 'off';
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-base">{t('remote.title')}</DialogTitle>
-        </DialogHeader>
+    <div
+      className="fixed z-[70] w-[560px] max-w-[94vw] rounded-lg border border-border bg-popover shadow-xl"
+      style={{ left: pos.x, top: pos.y }}
+    >
+      {/* 标题栏：按住拖动 */}
+      <div
+        className="flex cursor-move touch-none items-center justify-between rounded-t-lg border-b border-border px-3 py-1.5"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+      >
+        <span className="text-xs font-medium">{t('remote.title')}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* 内容区：内部滚动，不遮挡页面 */}
+      <div className="max-h-[calc(100vh-140px)] space-y-1.5 overflow-y-auto p-2.5">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {t('remote.pairHint')}
         </p>
@@ -284,7 +341,7 @@ export default function RemoteMapDialog({
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-5 px-1.5 text-[10.5px]"
+                      className="h-5 flex-shrink-0 px-1.5 text-[10.5px]"
                       onClick={() => onUseDevice(d)}
                     >
                       {t('remote.deviceUse')}
@@ -293,7 +350,7 @@ export default function RemoteMapDialog({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-5 px-1 text-[10.5px] text-muted-foreground"
+                    className="h-5 flex-shrink-0 px-1 text-[10.5px] text-muted-foreground"
                     onClick={() => onDeleteDevice(d.id)}
                   >
                     {t('remote.deviceDelete')}
@@ -327,7 +384,7 @@ export default function RemoteMapDialog({
             <Button
               variant="outline"
               size="sm"
-              className="h-6 px-2 text-[11px]"
+              className="h-6 flex-shrink-0 px-2 text-[11px]"
               disabled={!newDevLabel.trim() || !newDevFilter.trim()}
               onClick={() => {
                 const dev = onAddDevice(
@@ -360,7 +417,8 @@ export default function RemoteMapDialog({
           </div>
         </div>
 
-        <div className="max-h-[46vh] space-y-0.5 overflow-y-auto pr-1">
+        {/* 动作映射列表 */}
+        <div className="space-y-0.5">
           {actions.map((a) => {
             const bound = keyOf(a.id);
             const bleBound = bleCodeOf(a.id);
@@ -391,7 +449,7 @@ export default function RemoteMapDialog({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-6 px-1.5 text-[11px]"
+                    className="h-6 flex-shrink-0 px-1.5 text-[11px]"
                     onClick={() => setCapturing(a.id)}
                   >
                     {t('remote.bind')}
@@ -401,7 +459,7 @@ export default function RemoteMapDialog({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-1 text-[11px]"
+                    className="h-6 flex-shrink-0 px-1 text-[11px]"
                     onClick={() => clearBinding(a.id)}
                   >
                     {t('remote.clear')}
@@ -428,7 +486,7 @@ export default function RemoteMapDialog({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-6 px-1.5 text-[11px]"
+                    className="h-6 flex-shrink-0 px-1.5 text-[11px]"
                     onClick={() => setCapturingBle(a.id)}
                   >
                     {t('remote.bleBind')}
@@ -438,7 +496,7 @@ export default function RemoteMapDialog({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-1 text-[11px]"
+                    className="h-6 flex-shrink-0 px-1 text-[11px]"
                     onClick={() => clearBleBinding(a.id)}
                   >
                     {t('remote.clear')}
@@ -448,7 +506,7 @@ export default function RemoteMapDialog({
             );
           })}
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }
