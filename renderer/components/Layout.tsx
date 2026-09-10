@@ -37,6 +37,9 @@ import {
   Play,
   RefreshCw,
   Repeat,
+  BluetoothOff,
+  Bluetooth,
+  BluetoothConnected,
   Search,
   ScrollText,
   Settings,
@@ -323,6 +326,29 @@ const Layout = ({ children }) => {
   useEffect(() => {
     if (onRepeat) setRepeatMounted(true);
   }, [onRepeat]);
+
+  // 蓝牙遥控手柄桥状态：顶栏图标色调用；点击跳复读页并打开遥控配置窗
+  const [bleRemoteStatus, setBleRemoteStatus] = useState('off');
+  useEffect(() => {
+    const off = window?.ipc?.on?.(
+      'bleRemote:event',
+      (payload: { type: string; value: string }) => {
+        if (payload?.type === 'status') setBleRemoteStatus(payload.value);
+      },
+    );
+    void window?.ipc
+      ?.invoke('bleRemote:status')
+      .then((r: { success: boolean; data?: { status?: string } }) => {
+        if (r?.success && r.data?.status) setBleRemoteStatus(r.data.status);
+      })
+      .catch(() => {});
+    return () => off?.();
+  }, []);
+
+  const openBleRemotePanel = () => {
+    window.dispatchEvent(new CustomEvent('repeat:openRemoteMap'));
+    if (!asPath.includes('/repeat')) router.push(`/${locale}/repeat`);
+  };
 
   useEffect(() => {
     return repeatPlaybackBus.onStatus(setRepeatStatus);
@@ -779,6 +805,34 @@ const Layout = ({ children }) => {
               : undefined
           }
         >
+          <button
+            type="button"
+            onClick={openBleRemotePanel}
+            aria-label={t('bluetooth.remote')}
+            title={
+              bleRemoteStatus === 'connected'
+                ? t('bluetooth.connected')
+                : bleRemoteStatus === 'off'
+                  ? t('bluetooth.off')
+                  : t('bluetooth.retrying')
+            }
+            className={cn(
+              'titlebar-no-drag flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md transition-colors',
+              bleRemoteStatus === 'connected'
+                ? 'text-success hover:bg-success/10'
+                : bleRemoteStatus === 'off'
+                  ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  : 'animate-pulse text-warning hover:bg-warning/10',
+            )}
+          >
+            {bleRemoteStatus === 'connected' ? (
+              <BluetoothConnected className="h-4 w-4" />
+            ) : bleRemoteStatus === 'off' ? (
+              <BluetoothOff className="h-4 w-4" />
+            ) : (
+              <Bluetooth className="h-4 w-4" />
+            )}
+          </button>
           {currentSectionLabel && (
             <span className="titlebar-no-drag flex-shrink-0 truncate text-sm font-medium text-muted-foreground">
               {currentSectionLabel}

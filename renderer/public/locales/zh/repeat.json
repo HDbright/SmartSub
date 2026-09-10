@@ -335,6 +335,14 @@
     "bleLast": "最近手柄按键:",
     "bleBind": "手柄键",
     "blePressPrompt": "按下手柄按键…",
-    "bleHint": "私有协议蓝牙复读手柄（如艺漫新 BHA02）直连：连接后按键即时生效，无需窗口聚焦；手柄休眠时双击开机键唤醒即可自动重连。点「手柄键」后按下手柄对应按钮完成绑定。"
+    "bleHint": "私有协议蓝牙复读手柄（如艺漫新 BHA02）直连：连接后按键即时生效，无需窗口聚焦；手柄休眠时双击开机键唤醒即可自动重连。点「手柄键」后按下手柄对应按钮完成绑定。",
+    "deviceActive": "当前",
+    "deviceUse": "使用并连接",
+    "deviceDelete": "删除",
+    "deviceAdd": "添加",
+    "deviceLabel": "设备名称",
+    "deviceFilter": "名称匹配关键字",
+    "deviceChar": "按键通道 UUID 片段（默认 fb01）",
+    "deviceLast": "上次连接"
   }
 }

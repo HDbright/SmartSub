@@ -24,6 +24,11 @@ let wanted = false; // 用户意图：true = 想保持桥接运行
 let restartTimer: NodeJS.Timeout | null = null;
 let lastStatus = 'off';
 let currentFilter = 'BHA';
+let currentChar = 'fb01';
+// 正在运行的会话参数（判断「同设备已在运行」）与代际（旧进程退出不触发重启）
+let spawnedFilter = '';
+let spawnedChar = '';
+let generation = 0;
 
 /** C# 桥接助手源码（ASCII only：csc 按本地代码页读源文件，非 ASCII 注释会被吞行） */
 const CS_SOURCE = String.raw`
@@ -38,6 +43,7 @@ class BleBridge
 {
     static ulong target = 0;
     static string nameFilter = "BHA";
+    static string charFragment = "fb01";
 
     static T WaitOp<T>(Windows.Foundation.IAsyncOperation<T> op, int timeoutMs)
     {
@@ -71,7 +77,8 @@ class BleBridge
     static int Main(string[] args)
     {
         if (args.Length > 0 && args[0].Length > 0) nameFilter = args[0];
-        Emit("LOG boot filter=" + nameFilter);
+        if (args.Length > 1 && args[1].Length > 0) charFragment = args[1];
+        Emit("LOG boot filter=" + nameFilter + " char=" + charFragment);
         while (true)
         {
             try { RunSession(); }
@@ -103,11 +110,11 @@ class BleBridge
             foreach (var ch in chRes.Characteristics)
             {
                 string u = ch.Uuid.ToString();
-                if (u.IndexOf("fb01") >= 0 && (ch.CharacteristicProperties & GattCharacteristicProperties.Notify) != 0)
+                if (u.IndexOf(charFragment) >= 0 && (ch.CharacteristicProperties & GattCharacteristicProperties.Notify) != 0)
                     button = ch;
             }
         }
-        if (button == null) throw new Exception("fb01 not found");
+        if (button == null) throw new Exception(charFragment + " not found");
         var st = WaitOp(button.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify), 8000);
         if (st != GattCommunicationStatus.Success) throw new Exception("subscribe " + st);
         Emit("STATUS connected");
@@ -234,9 +241,12 @@ function ensureHelper(): boolean {
   }
 }
 
-function spawnHelper(nameFilter: string) {
+function spawnHelper() {
+  const myGen = ++generation;
+  spawnedFilter = currentFilter;
+  spawnedChar = currentChar;
   try {
-    child = spawn(helperExe(), [nameFilter], {
+    child = spawn(helperExe(), [currentFilter, currentChar], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -268,6 +278,8 @@ function spawnHelper(nameFilter: string) {
     logMessage(`BLE 桥接 stderr：${d.toString().slice(0, 200)}`, 'info'),
   );
   child.on('exit', () => {
+    // 切换设备时旧进程的退出事件按代际忽略，避免双进程
+    if (myGen !== generation) return;
     child = null;
     broadcast('status', 'disconnected');
     lastStatus = 'disconnected';
@@ -280,16 +292,27 @@ function scheduleRestart() {
   if (restartTimer) clearTimeout(restartTimer);
   restartTimer = setTimeout(() => {
     restartTimer = null;
-    if (wanted) spawnHelper(currentFilter);
+    if (wanted) spawnHelper();
   }, 5000);
 }
 
-function startHelper(nameFilter: string): { success: boolean; error?: string } {
+function startHelper(
+  nameFilter: string,
+  charFragment: string,
+): { success: boolean; error?: string } {
   currentFilter = nameFilter || 'BHA';
-  if (child) return { success: true };
+  currentChar = charFragment || 'fb01';
   if (!ensureHelper()) return { success: false, error: 'compile failed' };
   wanted = true;
-  spawnHelper(currentFilter);
+  if (child) {
+    if (spawnedFilter === currentFilter && spawnedChar === currentChar) {
+      return { success: true };
+    }
+    // 切换设备：终止旧进程（其 exit 回调因代际不匹配被忽略）
+    child.kill();
+    child = null;
+  }
+  spawnHelper();
   return { success: true };
 }
 
@@ -308,8 +331,11 @@ function stopHelper() {
 }
 
 export function setupBleRemoteHandlers() {
-  ipcMain.handle('bleRemote:start', (_e, { name }) =>
-    startHelper(typeof name === 'string' ? name : 'BHA'),
+  ipcMain.handle('bleRemote:start', (_e, { name, char }) =>
+    startHelper(
+      typeof name === 'string' ? name : 'BHA',
+      typeof char === 'string' ? char : 'fb01',
+    ),
   );
   ipcMain.handle('bleRemote:stop', () => {
     stopHelper();

@@ -335,6 +335,14 @@
     "bleLast": "Last controller key:",
     "bleBind": "Pad key",
     "blePressPrompt": "Press a controller button…",
-    "bleHint": "Direct link for proprietary BLE repeat controllers (e.g. Yimanxin BHA02): buttons work instantly once connected, window focus not required. Double-press power to wake a sleeping controller and it reconnects automatically. Click \"Pad key\" then press a button to bind."
+    "bleHint": "Direct link for proprietary BLE repeat controllers (e.g. Yimanxin BHA02): buttons work instantly once connected, window focus not required. Double-press power to wake a sleeping controller and it reconnects automatically. Click \"Pad key\" then press a button to bind.",
+    "deviceActive": "Active",
+    "deviceUse": "Use & Connect",
+    "deviceDelete": "Delete",
+    "deviceAdd": "Add",
+    "deviceLabel": "Device name",
+    "deviceFilter": "Name keyword",
+    "deviceChar": "Button channel UUID fragment (default fb01)",
+    "deviceLast": "Last connected"
   }
 }

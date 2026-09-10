@@ -182,6 +182,27 @@ const DEFAULT_REMOTE_MAP: Record<string, string> = {
   mediastop: 'stop',
 };
 
+/** 已登记的蓝牙遥控设备（连接记录持久化；nameFilter 为广播名匹配关键字） */
+export interface RemoteDeviceDef {
+  id: string;
+  label: string;
+  nameFilter: string;
+  /** 按键事件特征值 UUID 片段（BHA 系为 fb01；其它私有协议手柄按实际填写） */
+  charFragment: string;
+  addedAt: number;
+  lastConnectedAt?: number;
+}
+
+const DEFAULT_REMOTE_DEVICES: RemoteDeviceDef[] = [
+  {
+    id: 'bha02',
+    label: 'Yimanxin BHA02',
+    nameFilter: 'BHA',
+    charFragment: 'fb01',
+    addedAt: 0,
+  },
+];
+
 function loadPersistedCfg(): {
   rate?: number;
   loopMode?: LoopMode;
@@ -196,6 +217,8 @@ function loadPersistedCfg(): {
   nameMode?: MediaNameMode;
   remoteMap?: Record<string, string>;
   bleMap?: Record<string, string>;
+  remoteDevices?: RemoteDeviceDef[];
+  activeDeviceId?: string;
 } {
   try {
     return JSON.parse(localStorage.getItem(REPEAT_CFG_KEY) || '{}');
@@ -463,6 +486,13 @@ export default function RepeatWorkbench({
     () => loadPersistedCfg().bleMap || {},
   );
   const [bleStatus, setBleStatus] = useState('off');
+  // 蓝牙遥控设备记录与当前激活设备（连接别的手柄：登记 nameFilter + 按键通道片段）
+  const [remoteDevices, setRemoteDevices] = useState<RemoteDeviceDef[]>(
+    () => loadPersistedCfg().remoteDevices || DEFAULT_REMOTE_DEVICES,
+  );
+  const [activeDeviceId, setActiveDeviceId] = useState(
+    () => loadPersistedCfg().activeDeviceId || 'bha02',
+  );
 
   useEffect(() => {
     singleRepeatRef.current = singleRepeat;
@@ -487,6 +517,8 @@ export default function RepeatWorkbench({
           nameMode,
           remoteMap,
           bleMap,
+          remoteDevices,
+          activeDeviceId,
         }),
       );
     } catch {
@@ -505,6 +537,8 @@ export default function RepeatWorkbench({
     nameMode,
     remoteMap,
     bleMap,
+    remoteDevices,
+    activeDeviceId,
   ]);
 
   // 全屏状态同步（Esc 退出时复位按钮态）
@@ -2169,13 +2203,83 @@ export default function RepeatWorkbench({
   const remoteActionsRef = useRef(REMOTE_ACTIONS);
   remoteActionsRef.current = REMOTE_ACTIONS;
 
+  const activeDeviceIdRef = useRef(activeDeviceId);
+  activeDeviceIdRef.current = activeDeviceId;
+
+  const activeDevice =
+    remoteDevices.find((d) => d.id === activeDeviceId) || remoteDevices[0];
+
+  /** 切换/连接指定设备：停旧桥 → 按设备参数起新桥，并记录连接时间 */
+  const useDevice = (d: RemoteDeviceDef) => {
+    setActiveDeviceId(d.id);
+    void window?.ipc
+      ?.invoke('bleRemote:stop', {})
+      .catch(() => {})
+      .then(() =>
+        window?.ipc?.invoke('bleRemote:start', {
+          name: d.nameFilter,
+          char: d.charFragment,
+        }),
+      );
+    setRemoteDevices((prev) =>
+      prev.map((x) =>
+        x.id === d.id ? { ...x, lastConnectedAt: Date.now() } : x,
+      ),
+    );
+  };
+
+  /** 连接成功时回写设备的最后连接时间（记录） */
+  const touchActiveDevice = () => {
+    const id = activeDeviceIdRef.current;
+    setRemoteDevices((prev) =>
+      prev.map((x) =>
+        x.id === id ? { ...x, lastConnectedAt: Date.now() } : x,
+      ),
+    );
+  };
+
+  const addDevice = (
+    label: string,
+    nameFilter: string,
+    charFragment: string,
+  ) => {
+    const dev: RemoteDeviceDef = {
+      id: 'dev-' + Date.now().toString(36),
+      label,
+      nameFilter,
+      charFragment: charFragment || 'fb01',
+      addedAt: Date.now(),
+    };
+    setRemoteDevices((prev) => [...prev, dev]);
+    return dev;
+  };
+
+  const deleteDevice = (id: string) => {
+    setRemoteDevices((prev) => {
+      const next = prev.filter((d) => d.id !== id);
+      return next.length ? next : DEFAULT_REMOTE_DEVICES;
+    });
+  };
+
   const toggleBleRemote = () => {
     if (bleStatus === 'off') {
-      void window?.ipc?.invoke('bleRemote:start', { name: 'BHA' });
+      if (activeDevice) {
+        void window?.ipc?.invoke('bleRemote:start', {
+          name: activeDevice.nameFilter,
+          char: activeDevice.charFragment,
+        });
+      }
     } else {
       void window?.ipc?.invoke('bleRemote:stop', {});
     }
   };
+
+  // 顶栏蓝牙图标点击 → 打开遥控配置窗
+  useEffect(() => {
+    const h = () => setRemoteMapOpen(true);
+    window.addEventListener('repeat:openRemoteMap', h);
+    return () => window.removeEventListener('repeat:openRemoteMap', h);
+  }, []);
 
   // ---------- 蓝牙手柄（BLE 私有协议直连桥）：键码 -> 复读动作 ----------
   useEffect(() => {
@@ -2185,6 +2289,7 @@ export default function RepeatWorkbench({
         if (!payload) return;
         if (payload.type === 'status') {
           setBleStatus(payload.value);
+          if (payload.value === 'connected') touchActiveDevice();
           return;
         }
         // '00' 为松开帧，忽略；仅处理按下键码
@@ -2200,9 +2305,14 @@ export default function RepeatWorkbench({
       },
     );
     // 挂载即启动桥接：助手内部自动扫描重连，手柄唤醒后即可用，且无需窗口聚焦
-    void window?.ipc
-      ?.invoke('bleRemote:start', { name: 'BHA' })
-      .catch(() => {});
+    if (activeDevice) {
+      void window?.ipc
+        ?.invoke('bleRemote:start', {
+          name: activeDevice.nameFilter,
+          char: activeDevice.charFragment,
+        })
+        .catch(() => {});
+    }
     return () => {
       off?.();
       void window?.ipc?.invoke('bleRemote:stop', {}).catch(() => {});
@@ -4073,6 +4183,11 @@ export default function RepeatWorkbench({
           onBleToggle={toggleBleRemote}
           bleMap={bleMap}
           onBleMapChange={setBleMap}
+          devices={remoteDevices}
+          activeDeviceId={activeDevice ? activeDevice.id : ''}
+          onUseDevice={useDevice}
+          onAddDevice={addDevice}
+          onDeleteDevice={deleteDevice}
         />
       )}
       {dragOverlay}

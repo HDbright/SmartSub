@@ -345,5 +345,11 @@
     "parakeet": "Parakeet",
     "localCli": "Local command",
     "cloud": "Cloud ASR"
+  },
+  "bluetooth": {
+    "remote": "Bluetooth Controller",
+    "connected": "Controller connected",
+    "retrying": "Controller connecting… (click to configure)",
+    "off": "Controller not connected (click to configure)"
   }
 }

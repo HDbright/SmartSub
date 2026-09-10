@@ -345,5 +345,11 @@
     "parakeet": "Parakeet",
     "localCli": "本地命令",
     "cloud": "云端听写"
+  },
+  "bluetooth": {
+    "remote": "蓝牙遥控手柄",
+    "connected": "手柄已连接",
+    "retrying": "手柄连接中…（点击配置）",
+    "off": "手柄未连接（点击配置）"
   }
 }

@@ -11,6 +11,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import { Bluetooth, BluetoothConnected, BluetoothOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -26,6 +27,16 @@ export interface RemoteActionDef {
   run?: () => void;
 }
 
+/** 已登记的蓝牙遥控设备（与 RepeatWorkbench 的 RemoteDeviceDef 结构一致） */
+export interface RemoteDeviceEntry {
+  id: string;
+  label: string;
+  nameFilter: string;
+  charFragment: string;
+  addedAt: number;
+  lastConnectedAt?: number;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -39,6 +50,16 @@ interface Props {
   /** BLE 键码（'21'）→ 动作 id */
   bleMap: Record<string, string>;
   onBleMapChange: (next: Record<string, string>) => void;
+  /** 蓝牙遥控设备记录 */
+  devices: RemoteDeviceEntry[];
+  activeDeviceId: string;
+  onUseDevice: (d: RemoteDeviceEntry) => void;
+  onAddDevice: (
+    label: string,
+    nameFilter: string,
+    charFragment: string,
+  ) => RemoteDeviceEntry;
+  onDeleteDevice: (id: string) => void;
 }
 
 const isModifierKey = (e: KeyboardEvent) =>
@@ -70,6 +91,11 @@ export default function RemoteMapDialog({
   onBleToggle,
   bleMap,
   onBleMapChange,
+  devices,
+  activeDeviceId,
+  onUseDevice,
+  onAddDevice,
+  onDeleteDevice,
 }: Props) {
   const { t } = useTranslation('repeat');
   const [capturing, setCapturing] = useState<string | null>(null);
@@ -80,6 +106,9 @@ export default function RemoteMapDialog({
   } | null>(null);
   const [capturingBle, setCapturingBle] = useState<string | null>(null);
   const [lastBleCode, setLastBleCode] = useState<string | null>(null);
+  const [newDevLabel, setNewDevLabel] = useState('');
+  const [newDevFilter, setNewDevFilter] = useState('');
+  const [newDevChar, setNewDevChar] = useState('fb01');
   // 捕获目标用 ref 供 IPC 回调读取最新值
   const capturingBleRef = useRef<string | null>(null);
   capturingBleRef.current = capturingBle;
@@ -173,8 +202,8 @@ export default function RemoteMapDialog({
           {t('remote.pairHint')}
         </p>
 
-        {/* 蓝牙 BLE 手柄直连区 */}
-        <div className="space-y-1 rounded-md border border-border p-2">
+        {/* 蓝牙遥控设备管理区 */}
+        <div className="space-y-1.5 rounded-md border border-border p-2">
           <div className="flex items-center gap-2">
             {bleConnected ? (
               <BluetoothConnected className="h-4 w-4 text-emerald-500" />
@@ -212,6 +241,112 @@ export default function RemoteMapDialog({
                 : t('remote.bleToggleStart')}
             </Button>
           </div>
+
+          {/* 设备记录列表 */}
+          <div className="space-y-0.5">
+            {devices.map((d) => {
+              const active = d.id === activeDeviceId;
+              return (
+                <div
+                  key={d.id}
+                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-[11px] hover:bg-accent/50"
+                >
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 flex-shrink-0 rounded-full',
+                      active
+                        ? bleConnected
+                          ? 'bg-emerald-500'
+                          : 'bg-amber-500'
+                        : 'bg-muted-foreground/40',
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {d.label}
+                    <span className="ml-1 text-muted-foreground">
+                      ({d.nameFilter}
+                      {d.charFragment && d.charFragment !== 'fb01'
+                        ? ` · ${d.charFragment}`
+                        : ''}
+                      {d.lastConnectedAt
+                        ? ` · ${t('remote.deviceLast')} ${new Date(
+                            d.lastConnectedAt,
+                          ).toLocaleString()}`
+                        : ''}
+                      )
+                    </span>
+                  </span>
+                  {active ? (
+                    <span className="flex-shrink-0 text-primary">
+                      {t('remote.deviceActive')}
+                    </span>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-5 px-1.5 text-[10.5px]"
+                      onClick={() => onUseDevice(d)}
+                    >
+                      {t('remote.deviceUse')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 px-1 text-[10.5px] text-muted-foreground"
+                    onClick={() => onDeleteDevice(d.id)}
+                  >
+                    {t('remote.deviceDelete')}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 添加设备 */}
+          <div className="flex flex-wrap items-center gap-1 border-t border-border pt-1.5">
+            <Input
+              className="h-6 w-28 min-w-0 flex-1 text-[11px]"
+              placeholder={t('remote.deviceLabel')}
+              value={newDevLabel}
+              onChange={(e) => setNewDevLabel(e.target.value)}
+            />
+            <Input
+              className="h-6 w-24 min-w-0 text-[11px]"
+              placeholder={t('remote.deviceFilter')}
+              value={newDevFilter}
+              onChange={(e) => setNewDevFilter(e.target.value)}
+            />
+            <Input
+              className="h-6 w-20 min-w-0 font-mono text-[11px]"
+              placeholder="fb01"
+              title={t('remote.deviceChar')}
+              value={newDevChar}
+              onChange={(e) => setNewDevChar(e.target.value)}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              disabled={!newDevLabel.trim() || !newDevFilter.trim()}
+              onClick={() => {
+                const dev = onAddDevice(
+                  newDevLabel.trim(),
+                  newDevFilter.trim(),
+                  newDevChar.trim(),
+                );
+                setNewDevLabel('');
+                setNewDevFilter('');
+                setNewDevChar('fb01');
+                onUseDevice(dev);
+              }}
+            >
+              {t('remote.deviceAdd')}
+            </Button>
+          </div>
+          <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+            {t('remote.bleHint')}
+          </p>
           <div className="rounded bg-muted/40 px-2 py-1 font-mono text-[11px]">
             <span className="text-muted-foreground">{t('remote.bleLast')}</span>
             {lastBleCode ? ` 0x${lastBleCode}` : ' —'}
@@ -223,9 +358,6 @@ export default function RemoteMapDialog({
               </span>
             ) : null}
           </div>
-          <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-            {t('remote.bleHint')}
-          </p>
         </div>
 
         <div className="max-h-[46vh] space-y-0.5 overflow-y-auto pr-1">
