@@ -42,13 +42,14 @@ export function subtitleStyleToCSS(
     padding: `${4 * s}px ${8 * s}px`,
     // libass 行距≈1.2em，预览与之对齐，避免多行字幕预览比烧录结果偏高
     lineHeight: 1.2,
-    // 折行行为对齐 libass（force_style 未设 WrapStyle，默认仅在空格处断行）：
-    //   - pre-wrap：保留显式换行与空格，并在空格处提供软换行点（英文/含空格文本会折行）；
-    //   - word-break: keep-all：禁止在 CJK 字符间断行，纯中文（无空格）长行不折行而是
-    //     溢出帧、由预览框 overflow-hidden 居中裁剪；
-    //   - overflow-wrap: normal：不强制打断长串。
+    // 折行行为对齐 libass：
+    //   - 默认（autoWrap !== false，对应 WrapStyle=0 智能换行）：
+    //     pre-wrap 保留显式换行与空格，并在空格处提供软换行点（英文/含空格文本会折行）；
+    //     word-break: keep-all 禁止在 CJK 字符间断行，纯中文（无空格）长行不折行而是
+    //     溢出帧、由预览框 overflow-hidden 居中裁剪；overflow-wrap: normal 不强制打断长串。
+    //   - autoWrap === false（对应 WrapStyle=2 不换行）：仅 pre 保留显式换行，绝不自动折行。
     // 效果：仅中文不换行、含空格按空格换行，与烧录结果一致（所见即所得）。
-    whiteSpace: 'pre-wrap',
+    whiteSpace: style.autoWrap === false ? 'pre' : 'pre-wrap',
     wordBreak: 'keep-all',
     overflowWrap: 'normal',
   };

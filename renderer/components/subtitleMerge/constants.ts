@@ -36,6 +36,7 @@ export const DEFAULT_STYLE: SubtitleStyle = {
   marginL: 20,
   marginR: 20,
   marginV: 20,
+  autoWrap: true,
 };
 
 /**
@@ -221,7 +222,7 @@ export const FONT_LIST = [
  * 字号范围
  */
 export const FONT_SIZE_RANGE = {
-  min: 12,
+  min: 8,
   max: 72,
   default: 24,
 };

@@ -26,6 +26,9 @@ export interface FavoriteCuesPanelProps {
   currentKey?: string | null;
   /** 点击收藏句：定位到对应视频的字幕句段 */
   onLocate: (fav: FavoriteCue) => void;
+  /** 分组筛选（由工作台持有，新收藏自动归入该分组） */
+  groupFilter: string;
+  onGroupFilterChange: (v: string) => void;
 }
 
 /** 收藏的字幕句：分组管理、出处信息（字幕文件 + 时间戳）、点击定位回播 */
@@ -36,10 +39,11 @@ export default function FavoriteCuesPanel({
   setFavGroups,
   currentKey,
   onLocate,
+  groupFilter,
+  onGroupFilterChange,
 }: FavoriteCuesPanelProps) {
   const { t } = useTranslation('repeat');
   const { openMenu, menuElement } = useContextMenu();
-  const [groupFilter, setGroupFilter] = useState<string>('all');
   const [newGroupOpen, setNewGroupOpen] = useState(false);
 
   const groupColor = (groupId: string | null): string | null => {
@@ -72,7 +76,7 @@ export default function FavoriteCuesPanel({
     setFavorites((prev) =>
       prev.map((f) => (f.groupId === groupId ? { ...f, groupId: null } : f)),
     );
-    setGroupFilter('all');
+    onGroupFilterChange('all');
     toast.success(t('fav.groupDeleted'));
   };
 
@@ -165,7 +169,7 @@ export default function FavoriteCuesPanel({
           <Plus className="h-3.5 w-3.5" />
           {t('fav.newGroup')}
         </Button>
-        <Select value={groupFilter} onValueChange={setGroupFilter}>
+        <Select value={groupFilter} onValueChange={onGroupFilterChange}>
           <SelectTrigger
             className="h-6 w-[120px] text-[11px]"
             aria-label={t('fav.filter')}

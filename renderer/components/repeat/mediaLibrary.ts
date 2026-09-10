@@ -15,6 +15,15 @@ export interface LibMedia {
   addedAt: number;
 }
 
+/**
+ * 列表文件名的显示模式：
+ * - custom   自定义名称（media.name，可在元信息对话框改名，默认=文件名）
+ * - fileName 文件名（始终取路径里的原始文件名）
+ * - tagTitle 内嵌标签 title（无标签回退文件名）
+ * - tagAlbum 内嵌标签 album（无标签回退文件名）
+ */
+export type MediaNameMode = 'custom' | 'fileName' | 'tagTitle' | 'tagAlbum';
+
 export interface LibCategory {
   id: string;
   name: string;

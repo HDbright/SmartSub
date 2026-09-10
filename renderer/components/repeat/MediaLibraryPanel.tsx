@@ -1,14 +1,18 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import { toast } from 'sonner';
 import {
+  ListVideo,
+  ListMusic,
   ArrowDownAZ,
+  Disc,
+  Tag,
   AudioLines,
   ChevronRight,
   Folder,
   FolderMinus,
   FolderOpen,
-  ListVideo,
+  FileText,
   Pencil,
   Play,
   Plus,
@@ -24,10 +28,18 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { EmptyState } from '@/components/EmptyState';
 import { cn } from 'lib/utils';
 import { useContextMenu } from './RepeatContextMenu';
 import { PromptDialog, MediaMetaDialog } from './dialogs';
+import { useMediaTagNames } from './useMediaTagNames';
 import {
   addCategory,
   addMediaToPlaylist,
@@ -41,6 +53,7 @@ import {
   sortIdsByName,
   type LibCategory,
   type LibMedia,
+  type MediaNameMode,
   type LibraryData,
   type PlaylistData,
 } from './mediaLibrary';
@@ -53,14 +66,28 @@ export interface RepeatMediaContext {
   currentMediaPath: string | null;
   /** 播放单个媒体文件（不带播放列表队列） */
   onPlayMedia: (path: string) => void;
+  /** 打开媒体属性查看弹窗 */
+  onShowProperties: (filePath: string) => void;
 }
 
 interface PanelProps {
   ctx: RepeatMediaContext;
+  /** 当前选中的分类（收藏/拖拽导入的目标；null = 未分类） */
+  selectedCatId: string | null;
+  onSelectCategory: (id: string | null) => void;
+  /** 列表文件名显示模式 */
+  nameMode: MediaNameMode;
+  onNameModeChange: (mode: MediaNameMode) => void;
 }
 
 /** 树状媒体库：分类目录 + 收藏的音视频，右键增删改查；列表可按元信息名称排序 */
-export default function MediaLibraryPanel({ ctx }: PanelProps) {
+export default function MediaLibraryPanel({
+  ctx,
+  selectedCatId,
+  onSelectCategory,
+  nameMode,
+  onNameModeChange,
+}: PanelProps) {
   const { t } = useTranslation('repeat');
   const {
     library,
@@ -71,6 +98,7 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
     onPlayMedia,
   } = ctx;
   const { openMenu, menuElement } = useContextMenu();
+  const { onShowProperties } = ctx;
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [sortByName, setSortByName] = useState(false);
@@ -145,6 +173,13 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
       onSelect: () => onPlayMedia(media.path),
     },
     {
+      key: 'reveal',
+      label: t('prop.openLocation'),
+      icon: FolderOpen,
+      onSelect: () =>
+        void window?.ipc?.invoke('mediaFile:reveal', { filePath: media.path }),
+    },
+    {
       key: 'meta',
       label: t('library.editMeta'),
       icon: Pencil,
@@ -160,7 +195,23 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
       key: 'toPlaylist',
       label: t('library.addToPlaylist'),
       icon: ListVideo,
-      onSelect: () => setPicker({ kind: 'addToPlaylist', mediaId: media.id }),
+      ...(playlists.length
+        ? {
+            children: playlists.map((p) => ({
+              key: `toPl-${p.id}`,
+              label: `${p.name} (${p.mediaIds.length})`,
+              icon: ListMusic,
+              onSelect: () => {
+                setPlaylists(addMediaToPlaylist(playlists, p.id, media.id));
+                toast.success(t('playlist.added'));
+              },
+            })),
+          }
+        : {
+            // 还没有播放列表：退回弹窗（内含新建输入框）
+            onSelect: () =>
+              setPicker({ kind: 'addToPlaylist', mediaId: media.id }),
+          }),
     },
     {
       key: 'removeFromCat',
@@ -199,6 +250,12 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
         setLibrary(next);
       },
     },
+    {
+      key: 'props',
+      label: t('prop.menuItem'),
+      icon: FileText,
+      onSelect: () => onShowProperties(media.path),
+    },
   ];
 
   /** 引用清理后回收无主媒体注册项 */
@@ -231,6 +288,31 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
     return next;
   };
 
+  // 内嵌标签（title/album）探测缓存，供标签类显示模式回退到文件名前使用
+  const allMediaPaths = useMemo(
+    () => Object.values(library.media).map((m) => m.path),
+    [library.media],
+  );
+  const tagNames = useMediaTagNames(allMediaPaths);
+
+  const basename = (p: string) =>
+    p.slice(Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')) + 1);
+
+  /** 按当前显示模式取行的展示名 */
+  const displayLabel = (m: LibMedia): string => {
+    const file = basename(m.path);
+    switch (nameMode) {
+      case 'fileName':
+        return file;
+      case 'tagTitle':
+        return tagNames[m.path]?.title || file;
+      case 'tagAlbum':
+        return tagNames[m.path]?.album || file;
+      default:
+        return m.name;
+    }
+  };
+
   // ---------- 渲染 ----------
   const isEmpty = !library.categories.length && !library.rootMediaIds.length;
 
@@ -252,7 +334,7 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
         <VideoIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
       )}
       <span className="min-w-0 flex-1 truncate" title={media.path}>
-        {media.name}
+        {displayLabel(media)}
       </span>
       <span
         className="opacity-0 transition-opacity group-hover:opacity-100"
@@ -284,14 +366,21 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
     return (
       <div key={cat.id}>
         <div
-          onClick={() => toggleCollapse(cat.id)}
+          onClick={() => onSelectCategory(cat.id)}
           onContextMenu={(e) => openMenu(e, categoryMenu(cat))}
-          className="flex cursor-pointer items-center gap-1 rounded-md py-1 pr-1 text-xs font-medium transition-colors hover:bg-accent"
+          className={cn(
+            'flex cursor-pointer items-center gap-1 rounded-md py-1 pr-1 text-xs font-medium transition-colors hover:bg-accent',
+            selectedCatId === cat.id && 'bg-primary/10 text-primary',
+          )}
           style={{ paddingLeft: 4 + depth * 14 }}
         >
           <ChevronRight
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCollapse(cat.id);
+            }}
             className={cn(
-              'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-transform',
+              'h-3.5 w-3.5 flex-shrink-0 cursor-pointer text-muted-foreground transition-transform',
               !isCollapsed && 'rotate-90',
             )}
           />
@@ -318,8 +407,74 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
     );
   };
 
+  // ---- 拖拽导入：媒体文件放入选中分类（未选中则入未分类），字幕文件忽略 ----
+  const [libDragOver, setLibDragOver] = useState(false);
+  const libDragDepth = useRef(0);
+
+  const handleLibDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    libDragDepth.current += 1;
+    setLibDragOver(true);
+  };
+  const handleLibDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const handleLibDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    libDragDepth.current = Math.max(0, libDragDepth.current - 1);
+    if (libDragDepth.current === 0) setLibDragOver(false);
+  };
+  const handleLibDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    libDragDepth.current = 0;
+    setLibDragOver(false);
+    const paths: string[] = [];
+    const dropped = e.dataTransfer.files;
+    for (let i = 0; i < dropped.length; i++) {
+      const p =
+        window?.ipc?.getPathForFile?.(dropped[i]) ??
+        (dropped[i] as unknown as { path?: string }).path;
+      if (p) paths.push(p);
+    }
+    if (!paths.length) return;
+    try {
+      const wrapped = (await window?.ipc?.invoke('getDroppedFiles', {
+        files: paths,
+        taskType: 'media',
+      })) as { filePath: string }[];
+      const mediaOnly = (wrapped || []).filter(
+        (f) =>
+          !['srt', 'vtt', 'ass', 'ssa', 'lrc'].includes(
+            (f.filePath.split('.').pop() || '').toLowerCase(),
+          ),
+      );
+      if (!mediaOnly.length) return;
+      let next = library;
+      mediaOnly.forEach((f) => {
+        next = favoriteMedia(next, f.filePath, selectedCatId).data;
+      });
+      setLibrary(next);
+      toast.success(t('library.dropAdded', { n: mediaOnly.length }));
+    } catch {
+      /* 忽略 */
+    }
+  };
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className={cn(
+        'flex min-h-0 flex-1 flex-col',
+        libDragOver && 'rounded-md ring-2 ring-primary/50',
+      )}
+      onDragEnter={handleLibDragEnter}
+      onDragOver={handleLibDragOver}
+      onDragLeave={handleLibDragLeave}
+      onDrop={handleLibDrop}
+    >
       {/* 工具行 */}
       <div className="mb-1 flex items-center gap-1">
         <Button
@@ -338,14 +493,47 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
           disabled={!currentMediaPath}
           onClick={() => {
             if (!currentMediaPath) return;
-            setLibrary(favoriteMedia(library, currentMediaPath, null).data);
-            toast.success(t('toast.favorited'));
+            setLibrary(
+              favoriteMedia(library, currentMediaPath, selectedCatId).data,
+            );
+            const label = selectedCatId
+              ? findCategory(library.categories, selectedCatId)?.name ||
+                t('library.unfiled')
+              : t('library.unfiled');
+            toast.success(t('fav.assigned', { label }));
           }}
         >
           <Star className="h-3.5 w-3.5" />
           {t('library.favoriteCurrent')}
         </Button>
         <span className="flex-1" />
+        {/* 文件名显示模式：纯图标 + 悬浮提示 */}
+        <Select
+          value={nameMode}
+          onValueChange={(v) => onNameModeChange(v as MediaNameMode)}
+        >
+          <SelectTrigger
+            className="h-6 w-8 px-1.5 text-[11px]"
+            title={t('library.nameMode')}
+            aria-label={t('library.nameMode')}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="min-w-0">
+            <SelectItem value="custom" title={t('library.nameCustom')}>
+              <Pencil className="h-3.5 w-3.5" />
+            </SelectItem>
+            <SelectItem value="fileName" title={t('library.nameFileName')}>
+              <FileText className="h-3.5 w-3.5" />
+            </SelectItem>
+            <SelectItem value="tagTitle" title={t('library.nameTagTitle')}>
+              <Tag className="h-3.5 w-3.5" />
+            </SelectItem>
+            <SelectItem value="tagAlbum" title={t('library.nameTagAlbum')}>
+              <Disc className="h-3.5 w-3.5" />
+            </SelectItem>
+          </SelectContent>
+        </Select>
         <Button
           variant="ghost"
           size="icon"
@@ -373,7 +561,13 @@ export default function MediaLibraryPanel({ ctx }: PanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {orderedRoot.length > 0 && (
             <div>
-              <div className="flex items-center gap-1 px-1 py-1 text-xs font-medium text-muted-foreground">
+              <div
+                onClick={() => onSelectCategory(null)}
+                className={cn(
+                  'flex cursor-pointer items-center gap-1 rounded-md px-1 py-1 text-xs font-medium transition-colors hover:bg-accent',
+                  selectedCatId === null && 'bg-primary/10 text-primary',
+                )}
+              >
                 <Star className="h-3.5 w-3.5" />
                 {t('library.unfiled')}
               </div>

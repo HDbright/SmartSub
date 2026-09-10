@@ -104,7 +104,14 @@
     "emptyDesc": "Use \"Favorite current media\" in the toolbar or right-click a recent item to favorite files, then organize them into categories",
     "sortByName": "Sort by name",
     "sortByAdded": "Sort by added order",
-    "more": "More"
+    "more": "More",
+    "dropHint": "Save to library",
+    "dropAdded": "Saved {{n}} media files",
+    "nameMode": "Display Name",
+    "nameCustom": "Custom Name",
+    "nameFileName": "File Name",
+    "nameTagTitle": "Tag Title",
+    "nameTagAlbum": "Album"
   },
   "playlist": {
     "newGroup": "New group",
@@ -122,7 +129,8 @@
     "empty": "No playlist groups",
     "emptyDesc": "Create a group with \"New group\", then add media from the library context menu",
     "emptyList": "This group is empty. Use \"Add to playlist\" from the library context menu",
-    "playing": "{{index}}/{{count}}"
+    "playing": "{{index}}/{{count}}",
+    "defaultName": "New Playlist"
   },
   "meta": {
     "title": "Media metadata",
@@ -132,7 +140,25 @@
     "pathLabel": "File path",
     "kindVideo": "Video",
     "kindAudio": "Audio",
-    "saved": "Metadata updated"
+    "saved": "Metadata updated",
+    "embedded": "Embedded metadata",
+    "containerLabel": "Container:",
+    "reading": "Reading…",
+    "readFail": "Could not read embedded metadata (container may be unsupported)",
+    "tagTitle": "Title",
+    "tagArtist": "Artist",
+    "tagAlbum": "Album",
+    "tagDate": "Year / Date",
+    "tagComment": "Comment",
+    "cover": "Cover image",
+    "noCover": "No embedded cover",
+    "coverReplace": "Replace cover…",
+    "coverRemove": "Remove cover",
+    "coverKeep": "Keep current",
+    "embeddedSaved": "Embedded metadata written losslessly",
+    "embeddedFailed": "Write failed: {{error}}",
+    "writing": "Writing…",
+    "presetLabel": "Presets"
   },
   "recent": {
     "title": "Recent",
@@ -172,7 +198,15 @@
     "updated": "Groups updated",
     "rowDelete": "Delete group (cues become ungrouped)",
     "moveUp": "Move up (smaller index)",
-    "moveDown": "Move down (larger index)"
+    "moveDown": "Move down (larger index)",
+    "assignSub": "Assign to group",
+    "assignTo": "Assign to \"{{label}}\"",
+    "newCueGroup": "Assign to new group…",
+    "assignMulti": "Assign to group ({{n}} cues)",
+    "assignedMulti": "Moved {{n}} cues to \"{{label}}\"",
+    "playGroup": "Play Group",
+    "playGroupItem": "{{label}} ({{n}})",
+    "playingGroup": "Playing \"{{label}}\""
   },
   "fav": {
     "title": "Saved",
@@ -196,7 +230,9 @@
     "count": "{{n}} cues",
     "empty": "No saved cues yet",
     "emptyDesc": "Right-click a subtitle cue and choose \"Save this cue\"; the source file and timestamps are recorded for one-click locating",
-    "filterEmpty": "No saved cues in this group"
+    "filterEmpty": "No saved cues in this group",
+    "addMulti": "Save {{n}} cues",
+    "addedMulti": "{{n}} cues saved"
   },
   "edit": {
     "section": "Edit cues",
@@ -216,5 +252,55 @@
     "splitInvalid": "Place the caret at a valid split position (text on both sides)",
     "splitDone": "Split into {{n}} cues"
   },
-  "abGapInvalid": "Point B must be after point A (at least 0.3s)"
+  "abGapInvalid": "Point B must be after point A (at least 0.3s)",
+  "vmenu": {
+    "showTransport": "Show transport bar",
+    "hideTransport": "Hide transport bar",
+    "showSubtitle": "Show subtitles",
+    "hideSubtitle": "Hide subtitles",
+    "speed": "Playback speed",
+    "playControl": "Playback control",
+    "prevFrame": "Previous frame",
+    "nextFrame": "Next frame",
+    "screenshot": "Screenshot (current frame)",
+    "subtitleStyle": "Subtitle style"
+  },
+  "shot": {
+    "fail": "Failed to capture the current frame",
+    "saved": "Screenshot saved to Downloads"
+  },
+  "speedNote": "Use 3x for quick visual scanning",
+  "gap": {
+    "label": "Repeat gap",
+    "none": "No gap",
+    "seconds": "{{n}}s",
+    "title": "Repeat gap duration",
+    "hint": "Pause for this duration between loop iterations"
+  },
+  "style": {
+    "reset": "Reset style",
+    "presetLabel": "Presets",
+    "font": "Font",
+    "fontSize": "Size",
+    "fontColor": "Color",
+    "position": "Position",
+    "textStyle": "Text style",
+    "outline": "Outline",
+    "shadow": "Shadow",
+    "marginShort": "Margin",
+    "autoWrap": "Auto Wrap"
+  },
+  "prop": {
+    "title": "Media Properties",
+    "menuItem": "Properties",
+    "duration": "Duration",
+    "bitrate": "Bitrate",
+    "fileSize": "File size",
+    "videoCodec": "Video codec",
+    "resolution": "Resolution",
+    "audioCodec": "Audio codec",
+    "sampleRate": "Sample rate",
+    "openLocation": "Open File Location",
+    "container": "Container"
+  }
 }

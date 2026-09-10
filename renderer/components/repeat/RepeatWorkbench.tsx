@@ -10,12 +10,17 @@ import { useRouter } from 'next/router';
 import { toast } from 'sonner';
 import {
   AudioLines,
+  Camera,
   Captions,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Combine,
   Eraser,
+  FileText,
   Folder,
+  Gauge,
   Pilcrow,
   ListVideo,
   Loader2,
@@ -24,11 +29,13 @@ import {
   PanelRight,
   Pause,
   Play,
+  Plus,
   Repeat,
   Save,
   Scissors,
   Search,
   Settings2,
+  SlidersHorizontal,
   Tags,
   User,
   SkipBack,
@@ -37,11 +44,13 @@ import {
   Star,
   Trash2,
   Video,
+  WrapText,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
@@ -57,10 +66,33 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/EmptyState';
 import { useHotkeys } from 'hooks/useHotkeys';
+import SubtitlePreviewOverlay from '@/components/subtitleMerge/SubtitlePreviewOverlay';
+import InteractiveSubtitleOverlay from './InteractiveSubtitleOverlay';
+import {
+  LIBASS_SRT_PLAYRES_Y,
+  subtitleStyleToCSS,
+} from '@/components/subtitleMerge/utils/styleUtils';
+import {
+  getDefaultStyle,
+  STYLE_PRESETS,
+} from '@/components/subtitleMerge/constants';
+import BasicStyleSettings from '@/components/subtitleMerge/BasicStyleSettings';
+import AdvancedStyleSettings from '@/components/subtitleMerge/AdvancedStyleSettings';
+import StylePresets from '@/components/subtitleMerge/StylePresets';
+import AlignmentSelector from '@/components/subtitleMerge/AlignmentSelector';
+import EffectStyleSettings from '@/components/subtitleMerge/EffectStyleSettings';
+import {
+  FONT_LIST,
+  FONT_SIZE_RANGE,
+} from '@/components/subtitleMerge/constants';
+import type { SubtitleStyle } from '../../../types/subtitleMerge';
 import { cn, isAudioPath } from 'lib/utils';
 import WaveformView from './WaveformView';
 import RepeatSubtitleList from './RepeatSubtitleList';
@@ -71,13 +103,19 @@ import MediaLibraryPanel, {
 import PlaylistPanel, { type MediaPlayMode } from './PlaylistPanel';
 import { useContextMenu, type ContextMenuItemDef } from './RepeatContextMenu';
 import FavoriteCuesPanel from './FavoriteCuesPanel';
+import { PromptDialog, MediaPropertiesDialog } from './dialogs';
 import { repeatPlaybackBus } from './playbackBus';
 import {
+  addMediaEntry,
+  addMediaToPlaylist,
   favoriteMedia,
+  findCategory,
   kindOf,
   pushRecent,
   removeRecent,
   useRepeatStore,
+  type MediaNameMode,
+  type PlaylistData,
   type RecentMedia,
 } from './mediaLibrary';
 import {
@@ -120,7 +158,7 @@ interface QueueEngine {
   maxPass: number;
 }
 
-const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 const LOOP_OPTIONS = ['inf', '1', '2', '3', '5', '10'] as const;
 type LoopMode = (typeof LOOP_OPTIONS)[number];
 
@@ -136,6 +174,11 @@ function loadPersistedCfg(): {
   showList?: boolean;
   listWidth?: number;
   singleRepeat?: boolean;
+  showTransport?: boolean;
+  showSubtitle?: boolean;
+  repeatGap?: number;
+  subtitleStyle?: SubtitleStyle;
+  nameMode?: MediaNameMode;
 } {
   try {
     return JSON.parse(localStorage.getItem(REPEAT_CFG_KEY) || '{}');
@@ -246,9 +289,10 @@ export default function RepeatWorkbench({
     favGroups,
     setFavGroups,
   } = useRepeatStore();
+  // 起始页（未载入媒体）默认停在「媒体库」，便于直接点击播放；载入媒体后切回「字幕」
   const [panelTab, setPanelTab] = useState<
     'subtitles' | 'library' | 'playlists' | 'favorites'
-  >('subtitles');
+  >('library');
   const [mediaPlayMode, setMediaPlayMode] = useState<MediaPlayMode>('once');
   const mediaQueueRef = useRef<{
     paths: string[];
@@ -351,8 +395,15 @@ export default function RepeatWorkbench({
   const [matchIndex, setMatchIndex] = useState(0);
   // 字幕分组（自动：说话人/自然段；手动：所选合并/移出）
   const [cueGroups, setCueGroups] = useState<GroupAssignment>({});
-  const [cueGroupPicker, setCueGroupPicker] = useState<number | null>(null);
-  const [pickerNewName, setPickerNewName] = useState('');
+  const [newGroupTargets, setNewGroupTargets] = useState<number[] | null>(null);
+  const [favGroupFilter, setFavGroupFilter] = useState<string>('all');
+  // 媒体库面板当前选中的分类（收藏当前媒体/拖拽导入的目标）
+  const [libSelectedCatId, setLibSelectedCatId] = useState<string | null>(null);
+  const [propertiesPath, setPropertiesPath] = useState<string | null>(null);
+  // 循环播放间隔（秒）：单句重复/AB/队列每次循环到尾后暂停该时长再继续
+  const [repeatGap, setRepeatGap] = useState<number>(
+    () => loadPersistedCfg().repeatGap ?? 0,
+  );
   const [splitIndex, setSplitIndex] = useState<number | null>(null);
   const [splitText, setSplitText] = useState('');
   const splitTextRef = useRef<HTMLTextAreaElement>(null);
@@ -373,6 +424,17 @@ export default function RepeatWorkbench({
     clamp(loadPersistedCfg().listWidth ?? 400, 260, 720),
   );
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // 视频画面：显示/隐藏 播放控制栏 与 视频内嵌字幕
+  const [showTransport, setShowTransport] = useState(
+    () => loadPersistedCfg().showTransport !== false,
+  );
+  const [showSubtitle, setShowSubtitle] = useState(
+    () => loadPersistedCfg().showSubtitle !== false,
+  );
+  // 媒体库/播放列表文件名显示模式（自定义名称/文件名/标签标题/专辑名）
+  const [nameMode, setNameMode] = useState<MediaNameMode>(
+    () => loadPersistedCfg().nameMode ?? 'custom',
+  );
 
   useEffect(() => {
     singleRepeatRef.current = singleRepeat;
@@ -390,12 +452,28 @@ export default function RepeatWorkbench({
           showList,
           listWidth,
           singleRepeat,
+          showTransport,
+          showSubtitle,
+          repeatGap,
+          subtitleStyle,
+          nameMode,
         }),
       );
     } catch {
       /* 忽略 */
     }
-  }, [rate, loopMode, showWave, showList, listWidth, singleRepeat]);
+  }, [
+    rate,
+    loopMode,
+    showWave,
+    showList,
+    listWidth,
+    singleRepeat,
+    showTransport,
+    showSubtitle,
+    repeatGap,
+    nameMode,
+  ]);
 
   // 全屏状态同步（Esc 退出时复位按钮态）
   useEffect(() => {
@@ -404,6 +482,190 @@ export default function RepeatWorkbench({
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
+
+  // 视频容器尺寸变化（字幕 overlay 的定位与字号缩放依赖）
+  const [videoBoxH, setVideoBoxH] = useState(0);
+  // 视频画面字幕样式（当前为合成页默认样式；后续接合成页样式设置时可替换）
+  const [styleDialogOpen, setStyleDialogOpen] = useState(false);
+  const [stylePanelPos, setStylePanelPos] = useState({ x: 0, y: 0 });
+  const [stylePanelSize, setStylePanelSize] = useState({ w: 300, h: 420 });
+  const stylePanelRef = useRef<HTMLDivElement>(null);
+
+  const startStylePanelResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = stylePanelSize.w;
+    const startH = stylePanelSize.h;
+    const move = (ev: PointerEvent) => {
+      setStylePanelSize({
+        w: Math.max(240, startW + (ev.clientX - startX)),
+        h: Math.max(280, startH + (ev.clientY - startY)),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  /** 标题栏拖拽移动面板 */
+  const startStylePanelDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startPos = { ...stylePanelPos };
+    const move = (ev: PointerEvent) => {
+      setStylePanelPos({
+        x: Math.max(0, startPos.x + (ev.clientX - startX)),
+        y: Math.max(0, startPos.y + (ev.clientY - startY)),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(() => {
+    const saved = loadPersistedCfg().subtitleStyle;
+    return saved ? { ...getDefaultStyle(), ...saved } : getDefaultStyle();
+  });
+  const videoBoxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = videoBoxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setVideoBoxH(el.clientHeight));
+    ro.observe(el);
+    setVideoBoxH(el.clientHeight);
+    return () => ro.disconnect();
+  }, [videoPath]);
+
+  // 视频画面右键菜单 + 帧步进 + 截图
+  const FRAME_STEP_SEC = 1 / 30;
+  const GAP_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
+
+  /** 上一帧 / 下一帧：暂停后按 1/30 秒步进（engineSeek 防护避免引擎抢跳） */
+  const stepFrame = (dir: 1 | -1) => {
+    const v = videoRef.current;
+    if (!v || !videoPath || isAudioMedia) return;
+    v.pause();
+    engineSeek(
+      clamp(v.currentTime + dir * FRAME_STEP_SEC, 0, duration || v.currentTime),
+    );
+    setCurrentTime(v.currentTime);
+  };
+
+  /** 截取当前视频帧为 PNG 并下载到本地下载目录 */
+  const captureFrame = () => {
+    const v = videoRef.current as HTMLVideoElement | null;
+    if (!v || !v.videoWidth) {
+      toast.warning(t('shot.fail'));
+      return;
+    }
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          toast.error(t('shot.fail'));
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${basename(videoPath).replace(
+          /\.[^.]+$/,
+          '',
+        )}_${formatClock(v.currentTime).replace(/:/g, '')}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        toast.success(t('shot.saved'));
+      }, 'image/png');
+    } catch {
+      toast.error(t('shot.fail'));
+    }
+  };
+
+  const { openMenu: openVideoMenuRaw, menuElement: videoMenuElement } =
+    useContextMenu();
+
+  const openVideoMenu = (e: React.MouseEvent) => {
+    if (isAudioMedia) return;
+    openVideoMenuRaw(e, [
+      {
+        key: 'transport',
+        label: showTransport
+          ? t('vmenu.hideTransport')
+          : t('vmenu.showTransport'),
+        icon: SlidersHorizontal,
+        onSelect: () => setShowTransport((v) => !v),
+      },
+      {
+        key: 'subtitle',
+        label: showSubtitle ? t('vmenu.hideSubtitle') : t('vmenu.showSubtitle'),
+        icon: Captions,
+        onSelect: () => setShowSubtitle((v) => !v),
+      },
+      {
+        key: 'style',
+        label: t('vmenu.subtitleStyle'),
+        icon: Settings2,
+        onSelect: () => {
+          setStylePanelPos({ x: Math.max(20, window.innerWidth - 340), y: 80 });
+          setStyleDialogOpen(true);
+        },
+      },
+      {
+        key: 'speed',
+        label: t('vmenu.speed'),
+        icon: Gauge,
+        children: RATE_OPTIONS.map((r) => ({
+          key: `speed-${r}`,
+          label: `${r}x${r === rate ? ' ✓' : ''}`,
+          onSelect: () => setRate(r),
+        })),
+      },
+      {
+        key: 'playControl',
+        label: t('vmenu.playControl'),
+        icon: Play,
+        children: [
+          {
+            key: 'frame-prev',
+            label: t('vmenu.prevFrame'),
+            icon: ChevronLeft,
+            onSelect: () => stepFrame(-1),
+          },
+          {
+            key: 'frame-next',
+            label: t('vmenu.nextFrame'),
+            icon: ChevronRight,
+            onSelect: () => stepFrame(1),
+          },
+        ],
+      },
+      {
+        key: 'screenshot',
+        label: t('vmenu.screenshot'),
+        icon: Camera,
+        onSelect: captureFrame,
+      },
+      {
+        key: 'properties',
+        label: t('prop.menuItem'),
+        icon: FileText,
+        onSelect: () => setPropertiesPath(videoPath),
+      },
+    ]);
+  };
 
   // 深链进入（命令面板搜索媒体库）：?mediaId=xxx 直接载入并播放
   useEffect(() => {
@@ -510,6 +772,7 @@ export default function RepeatWorkbench({
     setSelection(new Set());
     setZoomOpen(false);
     setZoom({ a: 0, b: 1 });
+    setPanelTab('subtitles');
     // 记录最近播放（同名自动配对成功后会回填 subtitlePath）
     setRecents((prev) =>
       pushRecent(prev, {
@@ -520,6 +783,45 @@ export default function RepeatWorkbench({
         subtitlePath: explicitSubtitlePath,
       }),
     );
+    // 自动加入媒体库与默认播放列表
+    setLibrary((prev) => {
+      const { data } = addMediaEntry(prev, path);
+      const mediaId = Object.values(data.media).find(
+        (m) => m.path === path,
+      )?.id;
+      if (mediaId) {
+        // 确保存在默认播放列表并把媒体加入
+        setPlaylists((pls) => {
+          let def = pls.find((p) => p.id === '__default__');
+          if (!def) {
+            def = {
+              id: '__default__',
+              name: t('playlist.defaultName'),
+              mediaIds: [],
+              createdAt: Date.now(),
+            };
+            return [...pls, def];
+          }
+          return pls;
+        });
+        // 需要在 playlists 状态也更新后加入，用回调嵌套确保拿到最新值
+        setTimeout(() => {
+          setPlaylists((pls) => {
+            if (!pls.find((p) => p.id === '__default__')) {
+              const def: PlaylistData = {
+                id: '__default__',
+                name: t('playlist.defaultName'),
+                mediaIds: [mediaId],
+                createdAt: Date.now(),
+              };
+              return [...pls, def];
+            }
+            return addMediaToPlaylist(pls, '__default__', mediaId);
+          });
+        }, 0);
+      }
+      return data;
+    });
     // 秒开占位伪包络，再异步解码真实波形
     setPeaks(makePseudoPeaks(path.length));
     setFinePeaks(null);
@@ -582,14 +884,24 @@ export default function RepeatWorkbench({
   const buildWave = async (path: string) => {
     const token = ++waveTokenRef.current;
     try {
-      const res = await fetch(`media://${encodeURIComponent(path)}`);
-      const buf = await res.arrayBuffer();
+      // 打包环境页面源为 app://-，fetch('media://…') 跨协议被拒 → 统一经 IPC 读字节
+      const res = await window?.ipc?.invoke('mediaFile:readBuffer', {
+        filePath: path,
+      });
+      if (!res?.success || !res.data) {
+        throw new Error(res?.error || 'read audio file failed');
+      }
+      const bytes = new Uint8Array(res.data);
+      const arrayBuffer = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      );
       const AC =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
       const ac = new AC();
-      const audio = await ac.decodeAudioData(buf);
+      const audio = await ac.decodeAudioData(arrayBuffer);
       const ch = audio.getChannelData(0);
       try {
         ac.close();
@@ -791,8 +1103,12 @@ export default function RepeatWorkbench({
 
   const favoriteCurrent = () => {
     if (!videoPath) return;
-    setLibrary(favoriteMedia(library, videoPath, null).data);
-    toast.success(t('toast.favorited'));
+    setLibrary(favoriteMedia(library, videoPath, libSelectedCatId).data);
+    const label = libSelectedCatId
+      ? findCategory(library.categories, libSelectedCatId)?.name ||
+        t('library.unfiled')
+      : t('library.unfiled');
+    toast.success(t('fav.assigned', { label }));
     setPanelTab('library');
   };
 
@@ -803,6 +1119,7 @@ export default function RepeatWorkbench({
     setPlaylists,
     currentMediaPath: videoPath || null,
     onPlayMedia: playSingleMedia,
+    onShowProperties: setPropertiesPath,
   };
 
   const formatAgo = (ts: number) => {
@@ -883,32 +1200,28 @@ export default function RepeatWorkbench({
   };
 
   const assignCueToGroup = (
-    cueIndex: number,
+    cueIndex: number | number[],
     group: CueGroup | null,
     label: string,
   ) => {
+    const indices = Array.isArray(cueIndex) ? cueIndex : [cueIndex];
     setCueGroups((prev) => {
       const next = { ...prev };
-      if (group) next[cues[cueIndex].id] = group;
-      else delete next[cues[cueIndex].id];
+      indices.forEach((i) => {
+        const id = cues[i]?.id;
+        if (!id) return;
+        if (group) next[id] = group;
+        else delete next[id];
+      });
       return next;
     });
-    if (group) toast.success(t('group.assigned', { label }));
-  };
-
-  const createAndAssignCueGroup = (cueIndex: number) => {
-    const name = pickerNewName.trim();
-    if (!name) return;
-    const index =
-      Object.values(cueGroups).reduce((m, g) => Math.max(m, g.index), 0) + 1;
-    const group: CueGroup = {
-      index,
-      label: name,
-      color: GROUP_COLORS[(index - 1) % GROUP_COLORS.length],
-    };
-    assignCueToGroup(cueIndex, group, name);
-    setPickerNewName('');
-    setCueGroupPicker(null);
+    if (group) {
+      toast.success(
+        indices.length > 1
+          ? t('group.assignedMulti', { label, n: indices.length })
+          : t('group.assigned', { label }),
+      );
+    }
   };
 
   // ---------- 字幕句合并 / 分拆 ----------
@@ -1038,50 +1351,132 @@ export default function RepeatWorkbench({
     toast.success(t('edit.splitDone', { n: 2 }));
   };
 
-  const favoriteCue = (i: number) => {
-    const cue = cues[i];
-    if (!cue) return;
+  /** 新建组并把所选句都归入 */
+  const createGroupAndAssign = (name: string) => {
+    if (!name || !newGroupTargets?.length) return;
+    const index =
+      Object.values(cueGroups).reduce((m, g) => Math.max(m, g.index), 0) + 1;
+    assignCueToGroup(
+      newGroupTargets,
+      {
+        index,
+        label: name,
+        color: GROUP_COLORS[(index - 1) % GROUP_COLORS.length],
+      },
+      name,
+    );
+    setNewGroupTargets(null);
+  };
+
+  const favoriteCues = (indices: number[]) => {
+    if (!cues.length || !indices.length) return;
     if (!subtitlePath) {
       toast.warning(t('fav.noSource'));
       return;
     }
-    if (
-      favorites.some(
-        (f) =>
-          f.sourceSubtitle === subtitlePath &&
-          Math.abs(f.start - cue.start) < 0.01,
+    // 收藏标签页正按分组筛选时，新收藏自动归入当前筛选的分组
+    const targetGroupId =
+      panelTab === 'favorites' &&
+      favGroupFilter !== 'all' &&
+      favGroupFilter !== 'none'
+        ? favGroupFilter
+        : null;
+    const fresh: FavoriteCue[] = [];
+    indices.forEach((i) => {
+      const cue = cues[i];
+      if (!cue) return;
+      if (
+        favorites.some(
+          (f) =>
+            f.sourceSubtitle === subtitlePath &&
+            Math.abs(f.start - cue.start) < 0.01,
+        )
       )
-    ) {
-      toast.info(t('fav.exists'));
-      return;
-    }
-    setFavorites((prev) => [
-      {
-        id: `fc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        return;
+      fresh.push({
+        id: `fc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${i}`,
         text: cue.text,
         sourceSubtitle: subtitlePath,
         videoPath,
         start: cue.start,
         end: cue.end,
         createdAt: Date.now(),
-        groupId: null,
-      },
-      ...prev,
-    ]);
-    toast.success(t('fav.added'));
+        groupId: targetGroupId,
+      });
+    });
+    if (!fresh.length) {
+      toast.info(t('fav.exists'));
+      return;
+    }
+    setFavorites((prev) => [...fresh, ...prev]);
+    toast.success(
+      fresh.length > 1
+        ? t('fav.addedMulti', { n: fresh.length })
+        : t('fav.added'),
+    );
+  };
+
+  /** 播放指定分组：该组全部句子按序设为勾选并启动勾选队列复读 */
+  const playCueGroup = (g: CueGroup) => {
+    const idxs = cues
+      .map((c, idx) => (cueGroups[c.id]?.index === g.index ? idx : -1))
+      .filter((idx) => idx >= 0);
+    if (!idxs.length) return;
+    // 单句复读优先级最高，会抢占队列，先关闭
+    if (singleRepeatRef.current) setSingleRepeat(false);
+    const sel = new Set(idxs);
+    setSelection(sel);
+    startSelectionPlayback(sel);
+    toast.success(t('group.playingGroup', { label: g.label }));
   };
 
   /** 字幕行右键菜单 */
   const openCueContextMenu = (e: React.MouseEvent, i: number) => {
+    // 右键句在多选括选集内时：归入分组/收藏/移出分组作用于全部所选句
+    const multi = selection.has(i) && selection.size > 1;
+    const targets = multi ? Array.from(selection).sort((a, b) => a - b) : [i];
+    const assignChildren: ContextMenuItemDef[] = [
+      ...uniqueCueGroups.map((g) => ({
+        key: `assign-${g.index}`,
+        label: t('group.assignTo', { label: g.label }),
+        icon: Folder,
+        onSelect: () => assignCueToGroup(targets, g, g.label),
+      })),
+      { key: 'assign-sep', label: '', separator: true, onSelect: () => {} },
+      {
+        key: 'assign-new',
+        label: t('group.newCueGroup'),
+        icon: Plus,
+        onSelect: () => setNewGroupTargets(targets),
+      },
+      {
+        key: 'assign-manage',
+        label: t('group.manage'),
+        icon: Settings2,
+        onSelect: () => openGroupManager(),
+      },
+    ];
+    const anyGrouped = targets.some((idx) => cueGroups[cues[idx]?.id]);
+    const playGroupChildren: ContextMenuItemDef[] = uniqueCueGroups.map(
+      (g) => ({
+        key: `playgroup-${g.index}`,
+        label: t('group.playGroupItem', {
+          label: g.label,
+          n: cues.filter((c) => cueGroups[c.id]?.index === g.index).length,
+        }),
+        icon: Play,
+        onSelect: () => playCueGroup(g),
+      }),
+    );
     const items: ContextMenuItemDef[] = [
-      ...(cueGroups[cues[i]?.id]
+      ...(anyGrouped
         ? [
             {
               key: 'ungroup',
               label: t('group.removeFromGroup'),
               icon: Eraser,
               danger: true,
-              onSelect: () => assignCueToGroup(i, null, ''),
+              onSelect: () => assignCueToGroup(targets, null, ''),
             },
           ]
         : []),
@@ -1105,15 +1500,30 @@ export default function RepeatWorkbench({
       },
       {
         key: 'group',
-        label: t('group.assignPicker'),
+        label: multi
+          ? t('group.assignMulti', { n: targets.length })
+          : t('group.assignSub'),
         icon: Folder,
-        onSelect: () => setCueGroupPicker(i),
+        children: assignChildren,
       },
+      ...(uniqueCueGroups.length
+        ? [
+            {
+              key: 'playGroup',
+              label: t('group.playGroup'),
+              icon: Play,
+              children: playGroupChildren,
+            },
+          ]
+        : []),
       {
         key: 'fav',
-        label: t('fav.add'),
+        label:
+          targets.length > 1
+            ? t('fav.addMulti', { n: targets.length })
+            : t('fav.add'),
         icon: Star,
-        onSelect: () => favoriteCue(i),
+        onSelect: () => favoriteCues(targets),
       },
     ];
     openMenu(e, items);
@@ -1202,6 +1612,10 @@ export default function RepeatWorkbench({
   const stopAll = () => {
     stopAb();
     stopQueue();
+    if (gapTimerRef.current) {
+      clearTimeout(gapTimerRef.current);
+      gapTimerRef.current = null;
+    }
     const v = videoRef.current;
     if (v && !v.paused) v.pause();
   };
@@ -1340,7 +1754,8 @@ export default function RepeatWorkbench({
 
   /**
    * 勾选驱动的选择变更：
-   * - 勾选一条 → 未在复读时自动开始「播放所选」；复读中则把新段追加进队列；
+   * - 勾选只更新选择集，不自动播放（播放用工具栏「播放所选」/ 播放分组）；
+   *   复读进行中勾选则把新段追加进队列；
    * - 取消勾选一条 → 复读中从队列移除（移除当前段时自动跳到下一段）。
    */
   const handleSelectionChange = (
@@ -1366,8 +1781,6 @@ export default function RepeatWorkbench({
           });
           syncQueue();
         }
-      } else {
-        startSelectionPlayback(next);
       }
       return;
     }
@@ -1404,20 +1817,48 @@ export default function RepeatWorkbench({
   };
 
   /** 上一条/下一条字幕跳转 */
-  const jumpCue = (delta: number) => {
-    if (!cues.length) return;
-    let target = -1;
+  /** 按方向找目标句索引：>0 下一句起始，<0 上一句起始；无字幕返回 -1 */
+  const findCueIndex = (delta: number): number => {
+    if (!cues.length) return -1;
     if (delta > 0) {
-      target = cues.findIndex((c) => c.start > currentTime + 0.05);
-      if (target === -1) target = cues.length - 1;
-    } else {
-      for (let i = 0; i < cues.length; i++) {
-        if (cues[i].start < currentTime - 0.15) target = i;
-        else break;
-      }
-      if (target === -1) target = 0;
+      const t = cues.findIndex((c) => c.start > currentTime + 0.05);
+      return t === -1 ? cues.length - 1 : t;
     }
+    // ↑ = 上一句：先定位「当前所在句」（最后一个 start <= 当前时间的句），
+    // 目标即其前一句；无论处在句中还是句首，↑ 都跳到上一句起点。
+    let cur = -1;
+    for (let i = 0; i < cues.length; i++) {
+      if (cues[i].start <= currentTime + 0.001) cur = i;
+      else break;
+    }
+    return cur <= 0 ? 0 : cur - 1;
+  };
+
+  const jumpCue = (delta: number) => {
+    const target = findCueIndex(delta);
     if (target >= 0) activateCue(target);
+  };
+
+  /**
+   * 键盘 ↑/↓ 定位到上/下一句的起始时间点：
+   * 跳转前在播放 → 继续播放；原本暂停 → 保持暂停。
+   */
+  const locateCue = (delta: number) => {
+    const target = findCueIndex(delta);
+    if (target < 0) return;
+    const v = videoRef.current;
+    const wasPlaying = !!v && !v.paused;
+    stopAll();
+    // 单句复读开启时跟随跳转到新句，避免引擎把进度拽回旧句
+    if (singleRepeatRef.current) {
+      singleRepeatCueRef.current = {
+        start: cues[target].start,
+        end: cues[target].end,
+      };
+    }
+    engineSeek(cues[target].start + 0.001);
+    setCurrentTime(cues[target].start + 0.001);
+    if (wasPlaying && v) void v.play().catch(() => {});
   };
 
   /** 单击字幕行：停止复读并定位播放 */
@@ -1446,22 +1887,62 @@ export default function RepeatWorkbench({
     }, 800);
   };
 
+  // 循环间隔等待：暂停 repeatGap 秒后从 target 位置继续
+  const gapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gapPause = (target: number, cb?: () => void) => {
+    const v = videoRef.current;
+    if (!v || repeatGap <= 0) {
+      engineSeek(target);
+      if (v) void v.play().catch(() => {});
+      return;
+    }
+    v.pause();
+    gapTimerRef.current = setTimeout(() => {
+      gapTimerRef.current = null;
+      engineSeek(target);
+      void v.play().catch(() => {});
+    }, repeatGap * 1000);
+  };
+
   const handleTimeUpdate = () => {
     const v = videoRef.current;
     if (!v) return;
-    setCurrentTime(v.currentTime);
-    if (v.duration && isFinite(v.duration)) setDuration(v.duration);
-    if (v.seeking || engineSeekGuardRef.current) return;
 
-    // 单句重复：绝对优先——压过 AB 复读与勾选队列（循环次数），只循环锚定的那句
+    // 单句重复：绝对优先，在 setCurrentTime 之前处理，
+    // 避免越界时间值先传入 React 导致字幕高亮/overlay 闪跳到下一句
     if (singleRepeatRef.current) {
       if (!singleRepeatCueRef.current) anchorSingleRepeatCue(v.currentTime);
       const anchor = singleRepeatCueRef.current;
-      if (anchor && v.currentTime >= anchor.end - 0.02) {
-        engineSeek(anchor.start + 0.001);
+      if (
+        anchor &&
+        v.currentTime >= anchor.end - 0.02 &&
+        !v.seeking &&
+        !engineSeekGuardRef.current
+      ) {
+        if (repeatGap > 0) {
+          v.pause();
+          gapTimerRef.current = setTimeout(() => {
+            engineSeek(anchor.start + 0.001);
+            void v.play().catch(() => {});
+          }, repeatGap * 1000);
+          setCurrentTime(anchor.end);
+        } else {
+          // 无间隔：直接 seek 回句首，同步设置 React 状态保持一致
+          v.currentTime = anchor.start + 0.001;
+          setCurrentTime(anchor.start + 0.001);
+        }
+        if (v.duration && isFinite(v.duration)) setDuration(v.duration);
+        return;
       }
+      // 未到句尾（正常播放中）：更新 UI 但不进 AB/队列
+      setCurrentTime(v.currentTime);
+      if (v.duration && isFinite(v.duration)) setDuration(v.duration);
       return;
     }
+
+    setCurrentTime(v.currentTime);
+    if (v.duration && isFinite(v.duration)) setDuration(v.duration);
+    if (v.seeking || engineSeekGuardRef.current) return;
 
     const ab = abRef.current;
     if (
@@ -1472,8 +1953,7 @@ export default function RepeatWorkbench({
     ) {
       if (ab.repeats > 0) {
         ab.repeats -= 1;
-        engineSeek(ab.a);
-        if (v.paused) void v.play().catch(() => {});
+        gapPause(ab.a);
       } else {
         stopAb(true); // 次数用完：停在 B 点
       }
@@ -1499,8 +1979,7 @@ export default function RepeatWorkbench({
         q.pos = nextPos;
         q.pass = pass;
         syncQueue();
-        engineSeek(q.list[nextPos].start + 0.001);
-        if (v.paused) void v.play().catch(() => {});
+        gapPause(q.list[nextPos].start + 0.001);
         return;
       }
     }
@@ -1522,8 +2001,7 @@ export default function RepeatWorkbench({
         }
       }
       if (v0 && start != null) {
-        engineSeek(start + 0.001);
-        void v0.play().catch(() => {});
+        gapPause(start + 0.001);
       }
       return;
     }
@@ -1558,8 +2036,7 @@ export default function RepeatWorkbench({
       const v = videoRef.current;
       if (v && ab.repeats > 0) {
         ab.repeats -= 1;
-        engineSeek(ab.a);
-        void v.play().catch(() => {});
+        gapPause(ab.a);
         return;
       }
       stopAb();
@@ -1572,8 +2049,7 @@ export default function RepeatWorkbench({
       const v = videoRef.current;
       if (!v) return;
       if (mq.mode === 'loopOne') {
-        engineSeek(0);
-        void v.play().catch(() => {});
+        gapPause(0);
         return;
       }
       let next = mq.index + 1;
@@ -1597,10 +2073,11 @@ export default function RepeatWorkbench({
     active
       ? [
           { combo: 'space', handler: () => togglePlay() },
-          { combo: 'arrowleft', handler: () => seekTo(currentTime - 5) },
-          { combo: 'arrowright', handler: () => seekTo(currentTime + 5) },
-          { combo: 'arrowup', handler: () => jumpCue(-1) },
-          { combo: 'arrowdown', handler: () => jumpCue(1) },
+          // ←/→ 裸键 = 逐帧步进（见下方按住连跳监听）；Shift+←/→ = 快退/快进 5 秒
+          { combo: 'shift+arrowleft', handler: () => seekTo(currentTime - 5) },
+          { combo: 'shift+arrowright', handler: () => seekTo(currentTime + 5) },
+          { combo: 'arrowup', handler: () => locateCue(-1) },
+          { combo: 'arrowdown', handler: () => locateCue(1) },
           { combo: '[', handler: () => setPointA() },
           {
             combo: ']',
@@ -1613,10 +2090,83 @@ export default function RepeatWorkbench({
             allowInInput: true,
             handler: () => setSearchOpen(true),
           },
-          { combo: 'escape', handler: () => stopAll() },
+          {
+            combo: 'escape',
+            handler: () => {
+              // 有字幕句选中时优先清空选择；否则停止播放
+              if (selection.size > 0) {
+                setSelection(new Set());
+                stopQueue();
+              } else {
+                stopAll();
+              }
+            },
+          },
         ]
       : [],
   );
+
+  // ---------- ←/→ 逐帧步进：按住不松连续逐帧跳（自定义节拍），始终暂停不自动播放 ----------
+  const stepFrameRef = useRef(stepFrame);
+  stepFrameRef.current = stepFrame;
+
+  useEffect(() => {
+    if (!active) return;
+    let delayTimer: number | null = null;
+    let repeatTimer: number | null = null;
+    const stopRepeat = () => {
+      if (delayTimer !== null) {
+        window.clearTimeout(delayTimer);
+        delayTimer = null;
+      }
+      if (repeatTimer !== null) {
+        window.clearInterval(repeatTimer);
+        repeatTimer = null;
+      }
+    };
+    const startRepeat = (dir: 1 | -1) => {
+      stopRepeat();
+      stepFrameRef.current(dir);
+      // 长按 250ms 后进入连续步进（30ms/帧 ≈ 33 帧/秒，快于实时）；松开或失焦即停
+      delayTimer = window.setTimeout(() => {
+        repeatTimer = window.setInterval(() => stepFrameRef.current(dir), 30);
+      }, 250);
+    };
+    const isPlainArrow = (e: KeyboardEvent, key: 'ArrowLeft' | 'ArrowRight') =>
+      e.key === key && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return; // 忽略系统自动重复，改用自定义节拍
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'SELECT' ||
+          el.isContentEditable)
+      )
+        return;
+      if (isPlainArrow(e, 'ArrowLeft')) {
+        e.preventDefault();
+        startRepeat(-1);
+      } else if (isPlainArrow(e, 'ArrowRight')) {
+        e.preventDefault();
+        startRepeat(1);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') stopRepeat();
+    };
+    const onBlur = () => stopRepeat();
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      stopRepeat();
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [active]);
 
   // ---------- 底部迷你播放条总线：广播状态 / 接收命令 ----------
   useEffect(() => {
@@ -1636,6 +2186,15 @@ export default function RepeatWorkbench({
       else if (cmd === 'prev') jumpCue(-1);
     });
   });
+
+  // 已收藏句（当前字幕文件）的起始时间集合 → 列表 ★ 标记
+  const favoritedStarts = useMemo(() => {
+    const s = new Set<string>();
+    favorites.forEach((f) => {
+      if (f.sourceSubtitle === subtitlePath) s.add(f.start.toFixed(2));
+    });
+    return s;
+  }, [favorites, subtitlePath]);
 
   // ---------- 字幕搜索 / 替换 ----------
   const searchMatches = useMemo(() => {
@@ -1824,96 +2383,568 @@ export default function RepeatWorkbench({
     </div>
   ) : null;
 
-  if (!videoPath) {
-    return (
-      <div {...dropHandlers} className="relative h-full">
-        <div className="flex h-full items-center justify-center overflow-y-auto">
-          <div className="flex w-full max-w-md flex-col items-center gap-4 py-4">
-            <EmptyState
-              icon={Repeat}
-              title={t('noVideoTitle')}
-              description={t('noVideoDesc')}
-              action={
-                <Button onClick={chooseVideo}>
-                  <Video className="h-4 w-4" />
-                  {t('selectVideo')}
-                </Button>
-              }
-              className="w-full"
-            />
-            {recents.length > 0 && (
-              <div className="w-full">
-                <div className="mb-1 flex items-center gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {t('recent.title')}
+  // 右侧面板（字幕/媒体库/播放列表/收藏）：起始页与工作态共用，可直接点击播放
+  const rightPanel = showList ? (
+    <>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        onPointerDown={startListResize}
+        title={t('list.resizeHint')}
+        className="w-1 flex-shrink-0 cursor-col-resize self-stretch rounded bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/50"
+      />
+      <div
+        style={{ width: listWidth }}
+        className="flex min-h-0 flex-shrink-0 flex-col pl-2"
+      >
+        <Tabs
+          value={panelTab}
+          onValueChange={(v) =>
+            setPanelTab(
+              v as 'subtitles' | 'library' | 'playlists' | 'favorites',
+            )
+          }
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <TabsList className="mb-1.5 h-7 w-full flex-shrink-0 p-0.5">
+            <TabsTrigger value="subtitles" className="h-6 flex-1 px-1 text-xs">
+              {t('tabs.subtitles')}
+            </TabsTrigger>
+            <TabsTrigger value="library" className="h-6 flex-1 px-1 text-xs">
+              {t('tabs.library')}
+            </TabsTrigger>
+            <TabsTrigger value="playlists" className="h-6 flex-1 px-1 text-xs">
+              {t('tabs.playlists')}
+            </TabsTrigger>
+            <TabsTrigger value="favorites" className="h-6 flex-1 px-1 text-xs">
+              {t('fav.title')}
+            </TabsTrigger>
+          </TabsList>
+          {/* 内容区手动条件渲染（不经 radix TabsContent）：保证各标签页撑满可视空间 */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {panelTab === 'subtitles' && (
+              <>
+                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                  <Checkbox
+                    checked={cues.length > 0 && selection.size === cues.length}
+                    onCheckedChange={(checked) => {
+                      if (checked === true)
+                        setSelection(new Set(cues.map((_, i) => i)));
+                      else setSelection(new Set());
+                    }}
+                    aria-label={t('list.selectAll')}
+                    className="ml-1"
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {t('list.selectAll')}
                   </span>
-                  <span className="flex-1" />
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-1.5 text-[11px] text-muted-foreground"
-                    onClick={() => setRecents([])}
+                    className="h-6 px-1.5 text-[11px]"
+                    onClick={() => setSelection(new Set())}
                   >
-                    {t('recent.clear')}
+                    {t('list.clear')}
                   </Button>
-                </div>
-                <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border border-border bg-card p-1.5">
-                  {recents.slice(0, 10).map((r) => (
-                    <div
-                      key={r.path}
-                      onClick={() => playRecent(r)}
-                      onContextMenu={(e) =>
-                        openMenu(e, [
-                          {
-                            key: 'play',
-                            label: t('recent.play'),
-                            icon: Play,
-                            onSelect: () => playRecent(r),
-                          },
-                          {
-                            key: 'fav',
-                            label: t('recent.favorite'),
-                            icon: Star,
-                            onSelect: () => {
-                              setLibrary(
-                                favoriteMedia(library, r.path, null).data,
-                              );
-                              toast.success(t('toast.favorited'));
-                            },
-                          },
-                          {
-                            key: 'remove',
-                            label: t('recent.remove'),
-                            icon: X,
-                            danger: true,
-                            onSelect: () =>
-                              setRecents((prev) => removeRecent(prev, r.path)),
-                          },
-                        ])
-                      }
-                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent"
-                      title={r.path}
-                    >
-                      {r.kind === 'audio' ? (
-                        <AudioLines className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                      ) : (
-                        <Video className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                  <span className="text-[11px] text-muted-foreground tnum">
+                    {t('list.selected', { n: selection.size })}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Checkbox
+                      checked={singleRepeat}
+                      onCheckedChange={(checked) => {
+                        const on = checked === true;
+                        setSingleRepeat(on);
+                        if (on) {
+                          stopQueue();
+                          stopAb();
+                          anchorSingleRepeatCue(
+                            videoRef.current?.currentTime ?? 0,
+                          );
+                        } else {
+                          singleRepeatCueRef.current = null;
+                        }
+                      }}
+                      aria-label={t('list.singleRepeat')}
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                      {t('list.singleRepeat')}
+                    </span>
+                  </span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 gap-1 px-1.5 text-[11px]"
+                      >
+                        <Tags className="h-3.5 w-3.5" />
+                        {t('group.button')}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      {uniqueCueGroups.length > 0 && (
+                        <>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>
+                              <Play className="mr-2 h-3.5 w-3.5" />
+                              {t('group.playGroup')}
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+                              {uniqueCueGroups.map((g) => (
+                                <DropdownMenuItem
+                                  key={g.index}
+                                  onClick={() => playCueGroup(g)}
+                                >
+                                  <span
+                                    className="mr-2 h-2 w-2 flex-shrink-0 rounded-full"
+                                    style={{ backgroundColor: g.color }}
+                                  />
+                                  {t('group.playGroupItem', {
+                                    label: g.label,
+                                    n: cues.filter(
+                                      (c) => cueGroups[c.id]?.index === g.index,
+                                    ).length,
+                                  })}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          <DropdownMenuSeparator />
+                        </>
                       )}
-                      <span className="min-w-0 flex-1 truncate">{r.name}</span>
-                      {r.subtitlePath && (
-                        <Captions className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                      )}
-                      <span className="flex-shrink-0 text-[10.5px] text-faint">
-                        {formatAgo(r.playedAt)}
+                      <DropdownMenuLabel>{t('group.auto')}</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={applySpeakerGroups}>
+                        <User className="mr-2 h-3.5 w-3.5" />
+                        {t('group.bySpeaker')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={applyParagraphGroups}>
+                        <Pilcrow className="mr-2 h-3.5 w-3.5" />
+                        {t('group.byParagraph')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t('group.manual')}</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={mergeSelectionToGroup}>
+                        <Combine className="mr-2 h-3.5 w-3.5" />
+                        {t('group.mergeSelected')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={removeSelectionFromGroups}>
+                        <Eraser className="mr-2 h-3.5 w-3.5" />
+                        {t('group.removeSelected')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => setCueGroups({})}>
+                        <Trash2 className="mr-2 h-3.5 w-3.5" />
+                        {t('group.clear')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={openGroupManager}>
+                        <Settings2 className="mr-2 h-3.5 w-3.5" />
+                        {t('group.manage')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t('edit.section')}</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        onClick={() => mergeCues(Array.from(selection))}
+                      >
+                        <Combine className="mr-2 h-3.5 w-3.5" />
+                        {t('edit.mergeSelected', { n: selection.size })}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <span className="flex-1" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      'h-6 w-6',
+                      searchOpen ? 'text-primary' : 'text-muted-foreground',
+                    )}
+                    onClick={() => setSearchOpen((v) => !v)}
+                    aria-label={t('list.search')}
+                    title={t('list.search')}
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="flex items-center gap-1">
+                    <Checkbox
+                      checked={queueUi.active}
+                      disabled={!cues.length}
+                      onCheckedChange={(checked) => {
+                        if (checked === true) startSelectionPlayback(selection);
+                        else stopQueue();
+                      }}
+                      aria-label={t('list.playSelection')}
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                      {t('list.playSelection')}
+                    </span>
+                  </span>
+                  {queueUi.active && (
+                    <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+                      <span className="tnum">
+                        {t('list.queueInfo', {
+                          pass: queueUi.pass,
+                          pos: queueUi.pos + 1,
+                          total: queueUi.total,
+                          max:
+                            queueUi.maxPass === Infinity
+                              ? '∞'
+                              : String(queueUi.maxPass),
+                        })}
                       </span>
-                    </div>
-                  ))}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-1.5 text-[11px]"
+                        onClick={stopQueue}
+                      >
+                        {t('list.stop')}
+                      </Button>
+                    </span>
+                  )}
                 </div>
-              </div>
+                {cues.length ? (
+                  <>
+                    {searchOpen && (
+                      <div className="mb-1.5 space-y-1.5 rounded-md border border-border bg-muted/40 p-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                          <Input
+                            className="h-7 flex-1 text-xs"
+                            placeholder={t('list.searchPlaceholder')}
+                            value={searchQuery}
+                            onChange={(e) => {
+                              setSearchQuery(e.target.value);
+                              setMatchIndex(0);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter')
+                                gotoMatch(e.shiftKey ? -1 : 1);
+                              else if (e.key === 'Escape') setSearchOpen(false);
+                            }}
+                          />
+                          <span className="whitespace-nowrap text-[11px] text-muted-foreground tnum">
+                            {searchMatches.length
+                              ? `${(matchIndex % searchMatches.length) + 1}/${searchMatches.length}`
+                              : searchQuery
+                                ? '0/0'
+                                : ''}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            disabled={!searchMatches.length}
+                            onClick={() => gotoMatch(-1)}
+                            aria-label={t('list.prevMatch')}
+                          >
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            disabled={!searchMatches.length}
+                            onClick={() => gotoMatch(1)}
+                            aria-label={t('list.nextMatch')}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground"
+                            onClick={() => {
+                              setSearchOpen(false);
+                              setSearchQuery('');
+                            }}
+                            aria-label={t('list.closeSearch')}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            className="h-7 flex-1 text-xs"
+                            placeholder={t('list.replacePlaceholder')}
+                            value={replaceQuery}
+                            onChange={(e) => setReplaceQuery(e.target.value)}
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[11px]"
+                            disabled={!activeMatchId}
+                            onClick={replaceCurrentMatch}
+                          >
+                            {t('list.replace')}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[11px]"
+                            disabled={!searchMatches.length}
+                            onClick={replaceAllMatches}
+                          >
+                            {t('list.replaceAll')}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    <p className="mb-1 text-[11px] text-muted-foreground">
+                      {t('list.dragHint')}
+                    </p>
+                    <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                      <RepeatSubtitleList
+                        cues={cues}
+                        activeIndex={activeCueIndex}
+                        queueIndex={
+                          queueUi.active && queueUi.pos >= 0
+                            ? (queueRef.current.list[queueUi.pos]?.idx ?? -1)
+                            : -1
+                        }
+                        selection={selection}
+                        onSelectionChange={handleSelectionChange}
+                        onRowContextMenu={openCueContextMenu}
+                        groups={cueGroups}
+                        favoritedStarts={favoritedStarts}
+                        searchQuery={searchQuery}
+                        activeMatchId={activeMatchId}
+                        singleRepeatActive={singleRepeat}
+                        onActivate={activateCue}
+                        onEdit={(i, patch) => {
+                          setCues((prev) => {
+                            const next = [...prev];
+                            const cue = { ...next[i] };
+                            if (patch.text != null) cue.text = patch.text;
+                            if (patch.start != null) cue.start = patch.start;
+                            if (patch.end != null)
+                              cue.end = Math.max(patch.end, cue.start + 0.1);
+                            next[i] = cue;
+                            return next;
+                          });
+                          setDirty(true);
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState
+                    icon={Captions}
+                    title={t('list.empty')}
+                    description={t('list.emptyDesc')}
+                    className="flex-1 justify-center"
+                  />
+                )}
+              </>
+            )}
+            {panelTab === 'library' && (
+              <MediaLibraryPanel
+                ctx={mediaCtx}
+                selectedCatId={libSelectedCatId}
+                onSelectCategory={setLibSelectedCatId}
+                nameMode={nameMode}
+                onNameModeChange={setNameMode}
+              />
+            )}
+            {panelTab === 'playlists' && (
+              <PlaylistPanel
+                ctx={mediaCtx}
+                playMode={mediaPlayMode}
+                onPlayModeChange={setMediaPlayMode}
+                onPlayQueue={playMediaQueue}
+                queueInfo={mediaQueueUi}
+                onStopQueue={stopMediaQueue}
+                nameMode={nameMode}
+                onNameModeChange={setNameMode}
+              />
+            )}
+            {panelTab === 'favorites' && (
+              <FavoriteCuesPanel
+                favorites={favorites}
+                setFavorites={setFavorites}
+                favGroups={favGroups}
+                setFavGroups={setFavGroups}
+                currentKey={
+                  cues[activeCueIndex]
+                    ? `${subtitlePath}@${cues[activeCueIndex].start.toFixed(2)}`
+                    : null
+                }
+                onLocate={playFavorite}
+                groupFilter={favGroupFilter}
+                onGroupFilterChange={setFavGroupFilter}
+              />
             )}
           </div>
+        </Tabs>
+      </div>
+    </>
+  ) : null;
+
+  if (!videoPath) {
+    return (
+      <div {...dropHandlers} className="relative h-full">
+        <div className="flex h-full min-h-0 gap-1">
+          <div className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto">
+            <div className="flex w-full max-w-md flex-col items-center gap-4 py-4">
+              <EmptyState
+                icon={Repeat}
+                title={t('noVideoTitle')}
+                description={t('noVideoDesc')}
+                action={
+                  <Button onClick={chooseVideo}>
+                    <Video className="h-4 w-4" />
+                    {t('selectVideo')}
+                  </Button>
+                }
+                className="w-full"
+              />
+              {recents.length > 0 && (
+                <div className="w-full">
+                  <div className="mb-1 flex items-center gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {t('recent.title')}
+                    </span>
+                    <span className="flex-1" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-1.5 text-[11px] text-muted-foreground"
+                      onClick={() => setRecents([])}
+                    >
+                      {t('recent.clear')}
+                    </Button>
+                  </div>
+                  <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border border-border bg-card p-1.5">
+                    {recents.slice(0, 10).map((r) => (
+                      <div
+                        key={r.path}
+                        onClick={() => playRecent(r)}
+                        onContextMenu={(e) =>
+                          openMenu(e, [
+                            {
+                              key: 'play',
+                              label: t('recent.play'),
+                              icon: Play,
+                              onSelect: () => playRecent(r),
+                            },
+                            {
+                              key: 'fav',
+                              label: t('recent.favorite'),
+                              icon: Star,
+                              onSelect: () => {
+                                setLibrary(
+                                  favoriteMedia(library, r.path, null).data,
+                                );
+                                toast.success(t('toast.favorited'));
+                              },
+                            },
+                            {
+                              key: 'remove',
+                              label: t('recent.remove'),
+                              icon: X,
+                              danger: true,
+                              onSelect: () =>
+                                setRecents((prev) =>
+                                  removeRecent(prev, r.path),
+                                ),
+                            },
+                          ])
+                        }
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent"
+                        title={r.path}
+                      >
+                        {r.kind === 'audio' ? (
+                          <AudioLines className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                        ) : (
+                          <Video className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">
+                          {r.name}
+                        </span>
+                        {r.subtitlePath && (
+                          <Captions className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                        )}
+                        <span className="flex-shrink-0 text-[10.5px] text-faint">
+                          {formatAgo(r.playedAt)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          {rightPanel}
         </div>
         {homeMenuElement}
+        {/* 字幕样式设置对话框：复用合成页 BasicStyleSettings / AdvancedStyleSettings */}
+        <Dialog open={styleDialogOpen} onOpenChange={setStyleDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-base">
+                {t('vmenu.subtitleStyle')}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+              <StylePresets
+                activePresetId={
+                  STYLE_PRESETS.find((p) =>
+                    Object.keys(p.style).every(
+                      (k) => p.style[k] === subtitleStyle[k],
+                    ),
+                  )?.id ?? null
+                }
+                onSelectPreset={(id) => {
+                  const preset = STYLE_PRESETS.find((p) => p.id === id);
+                  if (preset)
+                    setSubtitleStyle((prev) => ({
+                      ...preset.style,
+                      autoWrap: prev.autoWrap,
+                    }));
+                }}
+              />
+              <BasicStyleSettings
+                style={subtitleStyle}
+                onUpdateStyle={(updates) =>
+                  setSubtitleStyle((prev) => ({ ...prev, ...updates }))
+                }
+              />
+              <AdvancedStyleSettings
+                style={subtitleStyle}
+                onUpdateStyle={(updates) =>
+                  setSubtitleStyle((prev) => ({ ...prev, ...updates }))
+                }
+                defaultOpen={false}
+              />
+            </div>
+            <DialogFooter className="gap-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSubtitleStyle(getDefaultStyle());
+                  setStyleDialogOpen(false);
+                }}
+              >
+                {t('style.reset')}
+              </Button>
+              <Button size="sm" onClick={() => setStyleDialogOpen(false)}>
+                {t('list.save')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {videoMenuElement}
+        {propertiesPath && (
+          <MediaPropertiesDialog
+            open={!!propertiesPath}
+            filePath={propertiesPath}
+            onClose={() => setPropertiesPath(null)}
+          />
+        )}
         {dragOverlay}
       </div>
     );
@@ -1933,6 +2964,7 @@ export default function RepeatWorkbench({
             {t('loadSubtitle')}
           </Button>
           <Button
+            variant={dirty ? 'default' : 'outline'}
             size="sm"
             onClick={saveSubtitle}
             disabled={!subtitlePath || !cues.length || !dirty}
@@ -1946,7 +2978,14 @@ export default function RepeatWorkbench({
             size="sm"
             onClick={favoriteCurrent}
             disabled={!videoPath}
-            title={t('library.favoriteCurrent')}
+            title={
+              libSelectedCatId
+                ? `${t('library.favoriteCurrent')} → ${
+                    findCategory(library.categories, libSelectedCatId)?.name ||
+                    t('library.unfiled')
+                  }`
+                : t('library.favoriteCurrent')
+            }
           >
             <Star className="h-3.5 w-3.5" />
             {t('library.favoriteCurrent')}
@@ -2012,6 +3051,23 @@ export default function RepeatWorkbench({
               size="icon"
               className={cn(
                 'h-7 w-7',
+                showTransport ? 'text-primary' : 'text-muted-foreground',
+              )}
+              onClick={() => setShowTransport((v) => !v)}
+              title={
+                showTransport
+                  ? t('vmenu.hideTransport')
+                  : t('vmenu.showTransport')
+              }
+              aria-label={t('vmenu.showTransport')}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                'h-7 w-7',
                 showList ? 'text-primary' : 'text-muted-foreground',
               )}
               onClick={() => setShowList((v) => !v)}
@@ -2033,11 +3089,62 @@ export default function RepeatWorkbench({
             )}
           >
             <div
+              ref={videoBoxRef}
               className="relative flex min-h-0 flex-1 cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-border bg-black"
               onClick={handleMediaClick}
               onDoubleClick={handleMediaDoubleClick}
+              onContextMenu={(e) => openVideoMenu(e)}
               title={t('mediaClickHint')}
             >
+              {showSubtitle &&
+                !isAudioMedia &&
+                !mediaError &&
+                activeCueIndex >= 0 &&
+                cues[activeCueIndex] &&
+                videoBoxH > 0 &&
+                duration > 0 &&
+                (() => {
+                  const vv = videoRef.current as HTMLVideoElement | null;
+                  const vw = vv?.videoWidth || 16;
+                  const vh = vv?.videoHeight || 9;
+                  const el = videoBoxRef.current;
+                  const scale = Math.min(
+                    (el?.clientWidth || 1) / vw,
+                    (el?.clientHeight || 1) / vh,
+                  );
+                  const scaleK = (vh * scale) / LIBASS_SRT_PLAYRES_Y;
+                  return (
+                    <div
+                      className="pointer-events-none absolute"
+                      style={{
+                        left: `calc(50% - ${(vw * scale) / 2}px)`,
+                        top: `calc(50% - ${(vh * scale) / 2}px)`,
+                        width: vw * scale,
+                        height: vh * scale,
+                      }}
+                    >
+                      {styleDialogOpen ? (
+                        <InteractiveSubtitleOverlay
+                          style={subtitleStyle}
+                          text={cues[activeCueIndex].text}
+                          scale={scaleK}
+                          onUpdateStyle={(updates) =>
+                            setSubtitleStyle((prev) => ({
+                              ...prev,
+                              ...updates,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <SubtitlePreviewOverlay
+                          style={subtitleStyle}
+                          text={cues[activeCueIndex].text}
+                          scale={scaleK}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
               {mediaError ? (
                 <div className="flex h-40 items-center text-sm text-white/70">
                   {t('toast.videoError')}
@@ -2182,625 +3289,188 @@ export default function RepeatWorkbench({
               </div>
             )}
 
-            {/* 走带控制条 */}
-            <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                aria-label={t('prevSubtitle')}
-                onClick={() => jumpCue(-1)}
-              >
-                <SkipBack className="h-4 w-4" />
-              </Button>
-              <Button size="sm" className="w-[76px]" onClick={togglePlay}>
-                {isPlaying ? (
-                  <Pause className="h-4 w-4" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                {isPlaying ? t('pause') : t('play')}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                aria-label={t('nextSubtitle')}
-                onClick={() => jumpCue(1)}
-              >
-                <SkipForward className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-destructive hover:text-destructive"
-                aria-label={t('stop')}
-                onClick={stopAll}
-              >
-                <Square className="h-3.5 w-3.5" />
-              </Button>
-              <span className="mx-1 font-mono text-xs text-muted-foreground tnum">
-                {formatClock(currentTime)} / {formatClock(duration)}
-              </span>
-              <span className="mx-1 h-4 w-px bg-border" />
-              {/* AB 复读：单按钮四态 */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={toggleAB}
-                className={cn(
-                  'gap-1',
-                  abUi.state === 'pickA' || abUi.state === 'pickB'
-                    ? 'border-primary/60 bg-primary/15 text-primary'
-                    : abUi.state === 'loop'
-                      ? 'border-amber-500/70 bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                      : '',
-                )}
-                title={
-                  abUi.state === 'loop'
-                    ? t('ab.tipLoop')
-                    : abUi.state === 'pickB'
-                      ? t('ab.tipB')
-                      : t('ab.tipIdle')
-                }
-              >
-                {abUi.state === 'loop' && abUi.a != null && abUi.b != null
-                  ? `AB ${formatClock(abUi.a)}-${formatClock(abUi.b)}`
-                  : t('ab.button')}
-              </Button>
-              <Select
-                value={loopMode}
-                onValueChange={(v) => setLoopMode(v as LoopMode)}
-              >
-                <SelectTrigger
-                  className="h-7 w-[96px] text-xs"
-                  aria-label={t('loop.label')}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LOOP_OPTIONS.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m === 'inf'
-                        ? t('loop.inf')
-                        : t('loop.n', { n: parseInt(m, 10) })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="flex-1" />
-              <span className="text-[11px] text-muted-foreground">
-                {t('speed')} · {rate.toFixed(2)}x
-              </span>
-              <Select
-                value={String(rate)}
-                onValueChange={(v) => setRate(parseFloat(v))}
-              >
-                <SelectTrigger
-                  className="h-7 w-[72px] text-xs"
-                  aria-label={t('speed')}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RATE_OPTIONS.map((r) => (
-                    <SelectItem key={r} value={String(r)}>
-                      {r}x
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  'h-7 w-7',
-                  showWave ? 'text-primary' : 'text-muted-foreground',
-                )}
-                onClick={() => setShowWave((v) => !v)}
-                title={t('toggleWave')}
-                aria-label={t('toggleWave')}
-              >
-                <AudioLines className="h-4 w-4" />
-              </Button>
-              {!isAudioMedia && (
+            {/* 走带控制条（视频画面右键可显隐） */}
+            {showTransport && (
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5">
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
-                  aria-label={
-                    isFullscreen ? t('exitFullscreen') : t('fullscreen')
-                  }
-                  title={isFullscreen ? t('exitFullscreen') : t('fullscreen')}
-                  onClick={toggleFullscreen}
+                  aria-label={t('prevSubtitle')}
+                  onClick={() => jumpCue(-1)}
                 >
-                  {isFullscreen ? (
-                    <Minimize2 className="h-4 w-4" />
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-full bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
+                  onClick={togglePlay}
+                  aria-label={isPlaying ? t('pause') : t('play')}
+                  title={isPlaying ? t('pause') : t('play')}
+                >
+                  {isPlaying ? (
+                    <Pause className="h-4 w-4" />
                   ) : (
-                    <Maximize2 className="h-4 w-4" />
+                    <Play className="h-4 w-4" />
                   )}
                 </Button>
-              )}
-            </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label={t('nextSubtitle')}
+                  onClick={() => jumpCue(1)}
+                >
+                  <SkipForward className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive"
+                  aria-label={t('stop')}
+                  onClick={stopAll}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+                <span className="mx-1 font-mono text-xs text-muted-foreground tnum">
+                  {formatClock(currentTime)} / {formatClock(duration)}
+                </span>
+                <span className="mx-1 h-4 w-px bg-border" />
+                {/* AB 复读：单按钮四态 */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleAB}
+                  className={cn(
+                    'gap-1',
+                    abUi.state === 'pickA' || abUi.state === 'pickB'
+                      ? 'border-primary/60 bg-primary/15 text-primary'
+                      : abUi.state === 'loop'
+                        ? 'border-amber-500/70 bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                        : '',
+                  )}
+                  title={
+                    abUi.state === 'loop'
+                      ? t('ab.tipLoop')
+                      : abUi.state === 'pickB'
+                        ? t('ab.tipB')
+                        : t('ab.tipIdle')
+                  }
+                >
+                  {abUi.state === 'loop' && abUi.a != null && abUi.b != null
+                    ? `AB ${formatClock(abUi.a)}-${formatClock(abUi.b)}`
+                    : t('ab.button')}
+                </Button>
+                <Select
+                  value={loopMode}
+                  onValueChange={(v) => setLoopMode(v as LoopMode)}
+                >
+                  <SelectTrigger
+                    className="h-7 w-[96px] text-xs"
+                    aria-label={t('loop.label')}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOOP_OPTIONS.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m === 'inf'
+                          ? t('loop.inf')
+                          : t('loop.n', { n: parseInt(m, 10) })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={String(repeatGap)}
+                  onValueChange={(v) => setRepeatGap(parseFloat(v))}
+                >
+                  <SelectTrigger
+                    className="h-7 w-[88px] text-xs"
+                    aria-label={t('gap.label')}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GAP_OPTIONS.map((g) => (
+                      <SelectItem key={g} value={String(g)}>
+                        {g === 0 ? t('gap.none') : t('gap.seconds', { n: g })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="flex-1" />
+                <span className="text-[11px] text-muted-foreground">
+                  {t('speed')} · {rate.toFixed(2)}x
+                </span>
+                <Select
+                  value={String(rate)}
+                  onValueChange={(v) => setRate(parseFloat(v))}
+                >
+                  <SelectTrigger
+                    className="h-7 w-[72px] text-xs"
+                    aria-label={t('speed')}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RATE_OPTIONS.map((r) => (
+                      <SelectItem key={r} value={String(r)}>
+                        {r}x
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    'h-7 w-7',
+                    showWave ? 'text-primary' : 'text-muted-foreground',
+                  )}
+                  onClick={() => setShowWave((v) => !v)}
+                  title={t('toggleWave')}
+                  aria-label={t('toggleWave')}
+                >
+                  <AudioLines className="h-4 w-4" />
+                </Button>
+                {!isAudioMedia && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label={
+                      isFullscreen ? t('exitFullscreen') : t('fullscreen')
+                    }
+                    title={isFullscreen ? t('exitFullscreen') : t('fullscreen')}
+                    onClick={toggleFullscreen}
+                  >
+                    {isFullscreen ? (
+                      <Minimize2 className="h-4 w-4" />
+                    ) : (
+                      <Maximize2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* 字幕面板宽度拖拽条 + 右侧字幕列表（可隐藏） */}
-          {showList && (
-            <>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                onPointerDown={startListResize}
-                title={t('list.resizeHint')}
-                className="w-1 flex-shrink-0 cursor-col-resize self-stretch rounded bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/50"
-              />
-              <div
-                style={{ width: listWidth }}
-                className="flex min-h-0 flex-shrink-0 flex-col pl-2"
-              >
-                <Tabs
-                  value={panelTab}
-                  onValueChange={(v) =>
-                    setPanelTab(
-                      v as 'subtitles' | 'library' | 'playlists' | 'favorites',
-                    )
-                  }
-                  className="flex min-h-0 flex-1 flex-col"
-                >
-                  <TabsList className="mb-1.5 h-7 w-full flex-shrink-0 p-0.5">
-                    <TabsTrigger
-                      value="subtitles"
-                      className="h-6 flex-1 px-1 text-xs"
-                    >
-                      {t('tabs.subtitles')}
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="library"
-                      className="h-6 flex-1 px-1 text-xs"
-                    >
-                      {t('tabs.library')}
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="playlists"
-                      className="h-6 flex-1 px-1 text-xs"
-                    >
-                      {t('tabs.playlists')}
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="favorites"
-                      className="h-6 flex-1 px-1 text-xs"
-                    >
-                      {t('fav.title')}
-                    </TabsTrigger>
-                  </TabsList>
-                  {/* 内容区手动条件渲染（不经 radix TabsContent）：保证各标签页撑满可视空间 */}
-                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                    {panelTab === 'subtitles' && (
-                      <>
-                        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                          <Checkbox
-                            checked={
-                              cues.length > 0 && selection.size === cues.length
-                            }
-                            onCheckedChange={(checked) => {
-                              if (checked === true)
-                                setSelection(new Set(cues.map((_, i) => i)));
-                              else setSelection(new Set());
-                            }}
-                            aria-label={t('list.selectAll')}
-                            className="ml-1"
-                          />
-                          <span className="text-[11px] text-muted-foreground">
-                            {t('list.selectAll')}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-1.5 text-[11px]"
-                            onClick={() => setSelection(new Set())}
-                          >
-                            {t('list.clear')}
-                          </Button>
-                          <span className="text-[11px] text-muted-foreground tnum">
-                            {t('list.selected', { n: selection.size })}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Checkbox
-                              checked={singleRepeat}
-                              onCheckedChange={(checked) => {
-                                const on = checked === true;
-                                setSingleRepeat(on);
-                                if (on) {
-                                  stopQueue();
-                                  stopAb();
-                                  anchorSingleRepeatCue(
-                                    videoRef.current?.currentTime ?? 0,
-                                  );
-                                } else {
-                                  singleRepeatCueRef.current = null;
-                                }
-                              }}
-                              aria-label={t('list.singleRepeat')}
-                            />
-                            <span className="text-[11px] text-muted-foreground">
-                              {t('list.singleRepeat')}
-                            </span>
-                          </span>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 gap-1 px-1.5 text-[11px]"
-                              >
-                                <Tags className="h-3.5 w-3.5" />
-                                {t('group.button')}
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-56">
-                              <DropdownMenuLabel>
-                                {t('group.auto')}
-                              </DropdownMenuLabel>
-                              <DropdownMenuItem onClick={applySpeakerGroups}>
-                                <User className="mr-2 h-3.5 w-3.5" />
-                                {t('group.bySpeaker')}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={applyParagraphGroups}>
-                                <Pilcrow className="mr-2 h-3.5 w-3.5" />
-                                {t('group.byParagraph')}
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuLabel>
-                                {t('group.manual')}
-                              </DropdownMenuLabel>
-                              <DropdownMenuItem onClick={mergeSelectionToGroup}>
-                                <Combine className="mr-2 h-3.5 w-3.5" />
-                                {t('group.mergeSelected')}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={removeSelectionFromGroups}
-                              >
-                                <Eraser className="mr-2 h-3.5 w-3.5" />
-                                {t('group.removeSelected')}
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => setCueGroups({})}
-                              >
-                                <Trash2 className="mr-2 h-3.5 w-3.5" />
-                                {t('group.clear')}
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={openGroupManager}>
-                                <Settings2 className="mr-2 h-3.5 w-3.5" />
-                                {t('group.manage')}
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuLabel>
-                                {t('edit.section')}
-                              </DropdownMenuLabel>
-                              <DropdownMenuItem
-                                onClick={() => mergeCues(Array.from(selection))}
-                              >
-                                <Combine className="mr-2 h-3.5 w-3.5" />
-                                {t('edit.mergeSelected', { n: selection.size })}
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          <span className="flex-1" />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                              'h-6 w-6',
-                              searchOpen
-                                ? 'text-primary'
-                                : 'text-muted-foreground',
-                            )}
-                            onClick={() => setSearchOpen((v) => !v)}
-                            aria-label={t('list.search')}
-                            title={t('list.search')}
-                          >
-                            <Search className="h-3.5 w-3.5" />
-                          </Button>
-                          <span className="flex items-center gap-1">
-                            <Checkbox
-                              checked={queueUi.active}
-                              disabled={!cues.length}
-                              onCheckedChange={(checked) => {
-                                if (checked === true)
-                                  startSelectionPlayback(selection);
-                                else stopQueue();
-                              }}
-                              aria-label={t('list.playSelection')}
-                            />
-                            <span className="text-[11px] text-muted-foreground">
-                              {t('list.playSelection')}
-                            </span>
-                          </span>
-                          {queueUi.active && (
-                            <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-                              <span className="tnum">
-                                {t('list.queueInfo', {
-                                  pass: queueUi.pass,
-                                  pos: queueUi.pos + 1,
-                                  total: queueUi.total,
-                                  max:
-                                    queueUi.maxPass === Infinity
-                                      ? '∞'
-                                      : String(queueUi.maxPass),
-                                })}
-                              </span>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-1.5 text-[11px]"
-                                onClick={stopQueue}
-                              >
-                                {t('list.stop')}
-                              </Button>
-                            </span>
-                          )}
-                        </div>
-                        {cues.length ? (
-                          <>
-                            {searchOpen && (
-                              <div className="mb-1.5 space-y-1.5 rounded-md border border-border bg-muted/40 p-1.5">
-                                <div className="flex items-center gap-1.5">
-                                  <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                                  <Input
-                                    className="h-7 flex-1 text-xs"
-                                    placeholder={t('list.searchPlaceholder')}
-                                    value={searchQuery}
-                                    onChange={(e) => {
-                                      setSearchQuery(e.target.value);
-                                      setMatchIndex(0);
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter')
-                                        gotoMatch(e.shiftKey ? -1 : 1);
-                                      else if (e.key === 'Escape')
-                                        setSearchOpen(false);
-                                    }}
-                                  />
-                                  <span className="whitespace-nowrap text-[11px] text-muted-foreground tnum">
-                                    {searchMatches.length
-                                      ? `${(matchIndex % searchMatches.length) + 1}/${searchMatches.length}`
-                                      : searchQuery
-                                        ? '0/0'
-                                        : ''}
-                                  </span>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6"
-                                    disabled={!searchMatches.length}
-                                    onClick={() => gotoMatch(-1)}
-                                    aria-label={t('list.prevMatch')}
-                                  >
-                                    <ChevronUp className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6"
-                                    disabled={!searchMatches.length}
-                                    onClick={() => gotoMatch(1)}
-                                    aria-label={t('list.nextMatch')}
-                                  >
-                                    <ChevronDown className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-muted-foreground"
-                                    onClick={() => {
-                                      setSearchOpen(false);
-                                      setSearchQuery('');
-                                    }}
-                                    aria-label={t('list.closeSearch')}
-                                  >
-                                    <X className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <Input
-                                    className="h-7 flex-1 text-xs"
-                                    placeholder={t('list.replacePlaceholder')}
-                                    value={replaceQuery}
-                                    onChange={(e) =>
-                                      setReplaceQuery(e.target.value)
-                                    }
-                                  />
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-6 px-2 text-[11px]"
-                                    disabled={!activeMatchId}
-                                    onClick={replaceCurrentMatch}
-                                  >
-                                    {t('list.replace')}
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-6 px-2 text-[11px]"
-                                    disabled={!searchMatches.length}
-                                    onClick={replaceAllMatches}
-                                  >
-                                    {t('list.replaceAll')}
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-                            <p className="mb-1 text-[11px] text-muted-foreground">
-                              {t('list.dragHint')}
-                            </p>
-                            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                              <RepeatSubtitleList
-                                cues={cues}
-                                activeIndex={activeCueIndex}
-                                queueIndex={
-                                  queueUi.active && queueUi.pos >= 0
-                                    ? (queueRef.current.list[queueUi.pos]
-                                        ?.idx ?? -1)
-                                    : -1
-                                }
-                                selection={selection}
-                                onSelectionChange={handleSelectionChange}
-                                onRowContextMenu={openCueContextMenu}
-                                groups={cueGroups}
-                                searchQuery={searchQuery}
-                                activeMatchId={activeMatchId}
-                                singleRepeatActive={singleRepeat}
-                                onActivate={activateCue}
-                                onEdit={(i, patch) => {
-                                  setCues((prev) => {
-                                    const next = [...prev];
-                                    const cue = { ...next[i] };
-                                    if (patch.text != null)
-                                      cue.text = patch.text;
-                                    if (patch.start != null)
-                                      cue.start = patch.start;
-                                    if (patch.end != null)
-                                      cue.end = Math.max(
-                                        patch.end,
-                                        cue.start + 0.1,
-                                      );
-                                    next[i] = cue;
-                                    return next;
-                                  });
-                                  setDirty(true);
-                                }}
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          <EmptyState
-                            icon={Captions}
-                            title={t('list.empty')}
-                            description={t('list.emptyDesc')}
-                            className="flex-1 justify-center"
-                          />
-                        )}
-                      </>
-                    )}
-                    {panelTab === 'library' && (
-                      <MediaLibraryPanel ctx={mediaCtx} />
-                    )}
-                    {panelTab === 'playlists' && (
-                      <PlaylistPanel
-                        ctx={mediaCtx}
-                        playMode={mediaPlayMode}
-                        onPlayModeChange={setMediaPlayMode}
-                        onPlayQueue={playMediaQueue}
-                        queueInfo={mediaQueueUi}
-                        onStopQueue={stopMediaQueue}
-                      />
-                    )}
-                    {panelTab === 'favorites' && (
-                      <FavoriteCuesPanel
-                        favorites={favorites}
-                        setFavorites={setFavorites}
-                        favGroups={favGroups}
-                        setFavGroups={setFavGroups}
-                        currentKey={
-                          cues[activeCueIndex]
-                            ? `${subtitlePath}@${cues[activeCueIndex].start.toFixed(2)}`
-                            : null
-                        }
-                        onLocate={playFavorite}
-                      />
-                    )}
-                  </div>
-                </Tabs>
-              </div>
-            </>
-          )}
+          {rightPanel}
         </div>
       </div>
       {homeMenuElement}
 
-      {/* 字幕句归入分组选择器 */}
-      <Dialog
-        open={cueGroupPicker != null}
-        onOpenChange={(o) => !o && setCueGroupPicker(null)}
-      >
-        <DialogContent className="max-w-xs">
-          <DialogHeader>
-            <DialogTitle className="text-base">
-              {t('group.assignPicker')}
-            </DialogTitle>
-          </DialogHeader>
-          {cueGroupPicker != null && cueGroups[cues[cueGroupPicker]?.id] && (
-            <button
-              type="button"
-              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-destructive hover:bg-accent"
-              onClick={() => {
-                assignCueToGroup(cueGroupPicker, null, '');
-                setCueGroupPicker(null);
-              }}
-            >
-              {t('group.removeFromGroup')}
-            </button>
-          )}
-          <div className="max-h-52 space-y-0.5 overflow-y-auto">
-            {uniqueCueGroups.map((g) => (
-              <button
-                key={g.index}
-                type="button"
-                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-                onClick={() => {
-                  assignCueToGroup(cueGroupPicker as number, g, g.label);
-                  setCueGroupPicker(null);
-                }}
-              >
-                <span
-                  className="h-3 w-[3px] flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: g.color }}
-                />
-                <span className="truncate">{g.label}</span>
-              </button>
-            ))}
-            {!uniqueCueGroups.length && (
-              <p className="py-2 text-center text-xs text-muted-foreground">
-                {t('group.noneYet')}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            onClick={() => {
-              setCueGroupPicker(null);
-              openGroupManager();
-            }}
-          >
-            <Settings2 className="h-3 w-3" />
-            {t('group.manage')}
-          </button>
-          <div className="flex gap-1.5">
-            <Input
-              className="h-7 flex-1 text-xs"
-              placeholder={t('group.newPlaceholder')}
-              value={pickerNewName}
-              onChange={(e) => setPickerNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter')
-                  createAndAssignCueGroup(cueGroupPicker as number);
-              }}
-            />
-            <Button
-              size="sm"
-              className="h-7"
-              disabled={!pickerNewName.trim()}
-              onClick={() => createAndAssignCueGroup(cueGroupPicker as number)}
-            >
-              {t('group.createAndAssign')}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* 归入新建组：输入组名 */}
+      <PromptDialog
+        open={newGroupTargets != null}
+        title={t('group.newCueGroup')}
+        placeholder={t('group.newPlaceholder')}
+        onSubmit={(value) => createGroupAndAssign(value)}
+        onClose={() => setNewGroupTargets(null)}
+      />
+
       {/* 分组管理对话框：改名 / 调序 / 删组 */}
       <Dialog open={groupManagerOpen} onOpenChange={setGroupManagerOpen}>
         <DialogContent className="max-w-md">
@@ -2940,6 +3610,295 @@ export default function RepeatWorkbench({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 字幕样式设置浮动面板：无遮罩、可拖拽、可调大小，视频画面清晰可见实时效果 */}
+      {styleDialogOpen && (
+        <div
+          ref={stylePanelRef}
+          className="fixed z-[60] flex flex-col rounded-lg border border-border bg-popover shadow-xl"
+          style={{
+            left: stylePanelPos.x,
+            top: stylePanelPos.y,
+            width: stylePanelSize.w,
+            height: stylePanelSize.h,
+          }}
+        >
+          <div
+            className="flex flex-shrink-0 cursor-move items-center justify-between rounded-t-lg border-b border-border px-3 py-1.5"
+            onPointerDown={startStylePanelDrag}
+          >
+            <span className="text-xs font-medium">
+              {t('vmenu.subtitleStyle')}
+            </span>
+            <button
+              type="button"
+              onClick={() => setStyleDialogOpen(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2.5">
+            {/* 预设样式 */}
+            <div>
+              <p className="mb-1 text-[10px] text-muted-foreground">
+                {t('meta.presetLabel')}
+              </p>
+              <StylePresets
+                activePresetId={null}
+                onSelectPreset={(id) => {
+                  const preset = STYLE_PRESETS.find((p) => p.id === id);
+                  if (preset)
+                    setSubtitleStyle((prev) => ({
+                      ...preset.style,
+                      autoWrap: prev.autoWrap,
+                    }));
+                }}
+              />
+            </div>
+
+            {/* 字体 + 字号 */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-muted-foreground">
+                  {t('style.font')}
+                </span>
+                <Select
+                  value={subtitleStyle.fontName}
+                  onValueChange={(v) =>
+                    setSubtitleStyle((p) => ({ ...p, fontName: v }))
+                  }
+                >
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FONT_LIST.map((f) => (
+                      <SelectItem key={f.value} value={f.value}>
+                        <span style={{ fontFamily: f.value }}>{f.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground">
+                    {t('style.fontSize')}
+                  </span>
+                  <span className="text-[10px] text-faint">
+                    {subtitleStyle.fontSize}px
+                  </span>
+                </div>
+                <div className="flex h-7 items-center">
+                  <Slider
+                    value={[subtitleStyle.fontSize]}
+                    min={FONT_SIZE_RANGE.min}
+                    max={FONT_SIZE_RANGE.max}
+                    step={1}
+                    onValueChange={([v]) =>
+                      setSubtitleStyle((p) => ({ ...p, fontSize: v }))
+                    }
+                    className="w-full"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 字体颜色 */}
+            <div className="space-y-0.5">
+              <span className="text-[10px] text-muted-foreground">
+                {t('style.fontColor')}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="color"
+                  value={subtitleStyle.primaryColor}
+                  onChange={(e) =>
+                    setSubtitleStyle((p) => ({
+                      ...p,
+                      primaryColor: e.target.value,
+                    }))
+                  }
+                  className="h-7 w-8 shrink-0 cursor-pointer rounded border border-border p-0.5"
+                />
+                <Input
+                  value={subtitleStyle.primaryColor}
+                  onChange={(e) =>
+                    setSubtitleStyle((p) => ({
+                      ...p,
+                      primaryColor: e.target.value,
+                    }))
+                  }
+                  className="h-7 min-w-0 flex-1 font-mono text-[11px]"
+                  placeholder="#FFFFFF"
+                />
+              </div>
+            </div>
+
+            {/* 位置 + 文字样式：紧凑两列 */}
+            <div className="grid grid-cols-[auto_1fr] gap-2.5">
+              <div>
+                <p className="mb-1 text-[10px] text-muted-foreground">
+                  {t('style.position')}
+                </p>
+                <AlignmentSelector
+                  value={subtitleStyle.alignment}
+                  onChange={(v) =>
+                    setSubtitleStyle((p) => ({ ...p, alignment: v }))
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-[10px] text-muted-foreground">
+                  {t('style.textStyle')}
+                </p>
+                <div className="flex items-center gap-1">
+                  {(
+                    [
+                      ['bold', 'B', 'font-bold'],
+                      ['italic', 'I', 'italic'],
+                      ['underline', 'U', 'underline'],
+                    ] as const
+                  ).map(([key, label, cls]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() =>
+                        setSubtitleStyle((p) => ({ ...p, [key]: !p[key] }))
+                      }
+                      className={cn(
+                        'flex h-7 w-7 items-center justify-center rounded border text-xs transition-colors',
+                        subtitleStyle[key]
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className={cls}>{label}</span>
+                    </button>
+                  ))}
+                  {/* 自动换行开关（缺省开；关闭后仅保留显式换行，长行溢出画面边缘） */}
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSubtitleStyle((p) => ({
+                        ...p,
+                        autoWrap: p.autoWrap === false,
+                      }))
+                    }
+                    title={t('style.autoWrap')}
+                    className={cn(
+                      'flex h-7 items-center gap-1 rounded border px-2 text-[10px] transition-colors',
+                      subtitleStyle.autoWrap !== false
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <WrapText className="h-3 w-3" />
+                    {t('style.autoWrap')}
+                  </button>
+                </div>
+                {/* 描边 */}
+                <div className="flex items-center gap-1.5">
+                  <span className="w-6 text-[10px] text-muted-foreground">
+                    {t('style.outline')}
+                  </span>
+                  <div className="flex h-5 flex-1 items-center">
+                    <Slider
+                      value={[subtitleStyle.outline]}
+                      min={0}
+                      max={10}
+                      step={1}
+                      onValueChange={([v]) =>
+                        setSubtitleStyle((p) => ({ ...p, outline: v }))
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                  <span className="w-3 text-right text-[10px] text-faint">
+                    {subtitleStyle.outline}
+                  </span>
+                </div>
+                {/* 阴影 */}
+                <div className="flex items-center gap-1.5">
+                  <span className="w-6 text-[10px] text-muted-foreground">
+                    {t('style.shadow')}
+                  </span>
+                  <div className="flex h-5 flex-1 items-center">
+                    <Slider
+                      value={[subtitleStyle.shadow]}
+                      min={0}
+                      max={10}
+                      step={1}
+                      onValueChange={([v]) =>
+                        setSubtitleStyle((p) => ({ ...p, shadow: v }))
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                  <span className="w-3 text-right text-[10px] text-faint">
+                    {subtitleStyle.shadow}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 边距 */}
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  ['L', subtitleStyle.marginL, 'marginL'],
+                  ['R', subtitleStyle.marginR, 'marginR'],
+                  ['V', subtitleStyle.marginV, 'marginV'],
+                ] as const
+              ).map(([label, val, key]) => (
+                <div key={key} className="space-y-0.5">
+                  <span className="block text-[10px] text-muted-foreground">
+                    {t('style.marginShort')} {label}
+                  </span>
+                  <Input
+                    type="number"
+                    value={val}
+                    onChange={(e) =>
+                      setSubtitleStyle((p) => ({
+                        ...p,
+                        [key]: Number(e.target.value),
+                      }))
+                    }
+                    className="h-6 text-[11px]"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-shrink-0 items-center justify-end gap-1.5 border-t border-border p-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSubtitleStyle(getDefaultStyle())}
+            >
+              {t('style.reset')}
+            </Button>
+            <Button size="sm" onClick={() => setStyleDialogOpen(false)}>
+              {t('list.save')}
+            </Button>
+          </div>
+          <div
+            className="absolute bottom-0 right-0 h-3 w-3 cursor-nwse-resize"
+            onPointerDown={startStylePanelResize}
+          />
+        </div>
+      )}
+
+      {videoMenuElement}
+      {propertiesPath && (
+        <MediaPropertiesDialog
+          open={!!propertiesPath}
+          filePath={propertiesPath}
+          onClose={() => setPropertiesPath(null)}
+        />
+      )}
       {dragOverlay}
     </div>
   );

@@ -9,5 +9,9 @@ export default function RepeatPage() {
   return null;
 }
 
-export const getStaticProps = makeStaticProperties(['common', 'repeat']);
+export const getStaticProps = makeStaticProperties([
+  'common',
+  'repeat',
+  'subtitleMerge',
+]);
 export { getStaticPaths };

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { Check, Pencil, X } from 'lucide-react';
+import { Check, Pencil, Star, X } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,6 +33,8 @@ export interface RepeatSubtitleListProps {
   ) => void;
   /** 分组标记（cue.id -> 组） */
   groups?: GroupAssignment;
+  /** 已收藏句的起始时间集合（"12.34" 格式），命中则行内显示 ★ */
+  favoritedStarts?: Set<string>;
   /** 行右键菜单（归入分组 / 收藏等） */
   onRowContextMenu?: (e: React.MouseEvent, index: number) => void;
   /** 搜索词：命中文字在行内高亮 */
@@ -54,6 +56,7 @@ export default function RepeatSubtitleList({
   onEdit,
   onRowContextMenu,
   groups,
+  favoritedStarts,
   searchQuery = '',
   activeMatchId = null,
   singleRepeatActive = false,
@@ -206,6 +209,7 @@ export default function RepeatSubtitleList({
     >
       {cues.map((cue, i) => {
         const group = groups?.[cue.id];
+        const favorited = favoritedStarts?.has(cue.start.toFixed(2)) ?? false;
         const selected = selection.has(i);
         const active = i === activeIndex;
         const inQueue = i === queueIndex;
@@ -223,7 +227,7 @@ export default function RepeatSubtitleList({
             onDoubleClick={() => startEdit(i)}
             onContextMenu={(e) => onRowContextMenu?.(e, i)}
             className={cn(
-              'group relative flex cursor-pointer gap-2 rounded-md border px-2 py-1.5 transition-colors',
+              'group relative flex cursor-pointer gap-1.5 rounded-md border px-2 py-1.5 transition-colors',
               active
                 ? singleRepeatActive
                   ? 'border-amber-500 bg-amber-500/10'
@@ -247,34 +251,50 @@ export default function RepeatSubtitleList({
             )}
             {group && (
               <span
-                className="w-[3px] flex-shrink-0 self-stretch rounded-full"
+                className="absolute inset-y-0 left-0 w-[3px] rounded-l-md"
                 style={{ backgroundColor: group.color }}
                 title={group.label}
               />
             )}
             <span
               data-no-drag
-              className="pt-0.5"
+              className="mt-[2px]"
               onClick={(e) => e.stopPropagation()}
             >
               <Checkbox
                 checked={selected}
                 onCheckedChange={() => toggleOne(i)}
                 aria-label={t('list.selectOne', { index: i + 1 })}
+                className="h-[18px] w-[18px]"
               />
             </span>
-            {group && (
-              <span
-                className="mt-0.5 flex h-4 min-w-[16px] flex-shrink-0 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none text-white"
-                style={{ backgroundColor: group.color }}
-                title={group.label}
-              >
-                {group.index}
+            {/* 标记槽：固定宽度、纵向排列（★ 上 / 组徽标下），不挤动后续内容 */}
+            <span className="flex h-full w-[18px] flex-shrink-0 flex-col items-center justify-center gap-0.5">
+              {favorited && (
+                <Star
+                  className="h-3 w-3 flex-shrink-0 fill-amber-400 text-amber-400"
+                  aria-label={t('fav.title')}
+                />
+              )}
+              {group && (
+                <span
+                  className="flex h-4 min-w-[16px] items-center justify-center rounded border px-0.5 text-[9px] font-medium leading-none"
+                  style={{
+                    color: group.color,
+                    borderColor: group.color + '55',
+                    backgroundColor: group.color + '14',
+                  }}
+                  title={group.label}
+                >
+                  {group.index}
+                </span>
+              )}
+            </span>
+            <span className="flex h-full w-[52px] flex-shrink-0 items-center font-mono text-[10.5px] leading-tight text-muted-foreground tnum">
+              <span className="block">
+                <span className="block">{formatShort(cue.start)}</span>
+                <span className="block">{formatShort(cue.end)}</span>
               </span>
-            )}
-            <span className="w-[96px] flex-shrink-0 pt-0.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground tnum">
-              <span className="block">{formatShort(cue.start)}</span>
-              <span className="block">{formatShort(cue.end)}</span>
             </span>
             {editing ? (
               <div
@@ -354,23 +374,24 @@ export default function RepeatSubtitleList({
                     </span>
                   )}
                 </span>
+                <span className="w-4 flex-shrink-0 self-start text-right font-mono text-[10.5px] text-faint tnum">
+                  {i + 1}
+                </span>
+                {/* 编辑按钮：悬停时悬浮在序号左侧（绝对定位，不移动任何内容/不遮挡序号） */}
                 <span
                   data-no-drag
-                  className="self-start opacity-0 transition-opacity group-hover:opacity-100"
+                  className="pointer-events-none absolute right-[22px] top-1/2 z-10 hidden -translate-y-1/2 group-hover:pointer-events-auto group-hover:block"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="icon"
-                    className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                    className="h-6 w-6 border-border bg-background/95 text-muted-foreground shadow-sm hover:text-foreground"
                     aria-label={t('list.edit')}
                     onClick={() => startEdit(i)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                </span>
-                <span className="w-6 flex-shrink-0 self-start text-right font-mono text-[10.5px] text-faint tnum">
-                  {i + 1}
                 </span>
               </>
             )}

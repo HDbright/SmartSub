@@ -57,6 +57,12 @@ export interface SubtitleStyle {
   marginR: number;
   /** 上下边距 (px) */
   marginV: number;
+  /**
+   * 是否自动换行（缺省 true）。
+   * false 时不自动折行（对应 ASS WrapStyle=2），仅保留文本中的显式换行；
+   * 过长行会溢出画面边缘，与 libass 行为一致。
+   */
+  autoWrap?: boolean;
 }
 
 /**

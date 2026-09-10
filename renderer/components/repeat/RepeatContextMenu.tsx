@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { LucideIcon } from 'lucide-react';
+import { ChevronRight, type LucideIcon } from 'lucide-react';
 import { cn } from 'lib/utils';
 
 /**
@@ -12,7 +12,11 @@ export interface ContextMenuItemDef {
   label: string;
   icon?: LucideIcon;
   danger?: boolean;
-  onSelect: () => void;
+  /** 渲染为分隔线（忽略其余字段） */
+  separator?: boolean;
+  /** 子菜单（悬停展开，二级） */
+  children?: ContextMenuItemDef[];
+  onSelect?: () => void;
 }
 
 export function useContextMenu() {
@@ -87,15 +91,59 @@ function FloatingMenu({
       className="fixed z-[100] min-w-[140px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
       onContextMenu={(e) => e.preventDefault()}
     >
-      {items.map((item) => {
+      {items.map((item, idx) => {
+        if (item.separator) {
+          return <div key={`sep-${idx}`} className="my-1 h-px bg-border" />;
+        }
         const Icon = item.icon;
+        if (item.children?.length) {
+          return (
+            <div key={item.key} className="group/sub relative">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+              >
+                {Icon ? <Icon className="h-3.5 w-3.5 flex-shrink-0" /> : null}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+              </button>
+              {/* 二级子菜单：悬停父项时在右侧展开 */}
+              <div className="absolute left-full top-0 z-10 hidden min-w-[130px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md group-hover/sub:block">
+                {item.children.map((child) => {
+                  const ChildIcon = child.icon;
+                  return (
+                    <button
+                      key={child.key}
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        child.onSelect?.();
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent',
+                        child.danger
+                          ? 'text-destructive hover:text-destructive'
+                          : '',
+                      )}
+                    >
+                      {ChildIcon ? (
+                        <ChildIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                      ) : null}
+                      <span className="truncate">{child.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        }
         return (
           <button
             key={item.key}
             type="button"
             onClick={() => {
               onClose();
-              item.onSelect();
+              item.onSelect?.();
             }}
             className={cn(
               'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent',

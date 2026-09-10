@@ -4,6 +4,9 @@ import { toast } from 'sonner';
 import {
   ArrowDownAZ,
   AudioLines,
+  Disc,
+  FileText,
+  FolderOpen,
   ListMusic,
   ListVideo,
   Pencil,
@@ -12,6 +15,7 @@ import {
   Repeat1,
   Repeat,
   Square,
+  Tag,
   Trash2,
   Video as VideoIcon,
 } from 'lucide-react';
@@ -28,6 +32,7 @@ import { cn } from 'lib/utils';
 import { useContextMenu } from './RepeatContextMenu';
 import { PromptDialog, MediaMetaDialog } from './dialogs';
 import type { RepeatMediaContext } from './MediaLibraryPanel';
+import { useMediaTagNames } from './useMediaTagNames';
 import {
   addMediaEntry,
   addMediaToPlaylist,
@@ -38,6 +43,7 @@ import {
   renamePlaylist,
   sortIdsByName,
   type LibMedia,
+  type MediaNameMode,
   type PlaylistData,
 } from './mediaLibrary';
 
@@ -52,6 +58,9 @@ interface PanelProps {
   /** 当前媒体队列状态（用于指示与停止） */
   queueInfo: { count: number; index: number } | null;
   onStopQueue: () => void;
+  /** 列表文件名显示模式 */
+  nameMode: MediaNameMode;
+  onNameModeChange: (mode: MediaNameMode) => void;
 }
 
 /** 播放列表面板：自建分组管理媒体，支持顺序播放 / 列表循环 / 单曲循环 */
@@ -62,6 +71,8 @@ export default function PlaylistPanel({
   onPlayQueue,
   queueInfo,
   onStopQueue,
+  nameMode,
+  onNameModeChange,
 }: PanelProps) {
   const { t } = useTranslation('repeat');
   const {
@@ -71,6 +82,7 @@ export default function PlaylistPanel({
     setPlaylists,
     currentMediaPath,
     onPlayMedia,
+    onShowProperties,
   } = ctx;
   const { openMenu, menuElement } = useContextMenu();
 
@@ -102,6 +114,27 @@ export default function PlaylistPanel({
     [selected, library.media],
   );
 
+  const basename = (p: string) =>
+    p.slice(Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')) + 1);
+
+  // 内嵌标签（title/album）探测缓存，供标签类显示模式回退到文件名前使用
+  const tagNames = useMediaTagNames(playablePaths);
+
+  /** 按当前显示模式取行的展示名 */
+  const displayLabel = (m: LibMedia): string => {
+    const file = basename(m.path);
+    switch (nameMode) {
+      case 'fileName':
+        return file;
+      case 'tagTitle':
+        return tagNames[m.path]?.title || file;
+      case 'tagAlbum':
+        return tagNames[m.path]?.album || file;
+      default:
+        return m.name;
+    }
+  };
+
   const playlistMenu = (pl: PlaylistData) => [
     {
       key: 'rename',
@@ -129,6 +162,13 @@ export default function PlaylistPanel({
       onSelect: () => onPlayMedia(media.path),
     },
     {
+      key: 'reveal',
+      label: t('prop.openLocation'),
+      icon: FolderOpen,
+      onSelect: () =>
+        void window?.ipc?.invoke('mediaFile:reveal', { filePath: media.path }),
+    },
+    {
       key: 'meta',
       label: t('library.editMeta'),
       icon: Pencil,
@@ -143,6 +183,12 @@ export default function PlaylistPanel({
         if (!selected) return;
         setPlaylists(removeMediaFromPlaylist(playlists, selected.id, media.id));
       },
+    },
+    {
+      key: 'props',
+      label: t('prop.menuItem'),
+      icon: FileText,
+      onSelect: () => onShowProperties(media.path),
     },
   ];
 
@@ -222,34 +268,55 @@ export default function PlaylistPanel({
             <Play className="h-3 w-3" />
             {t('playlist.playList')}
           </Button>
+          {/* 播放模式：纯图标选项，文字走悬浮提示，避免窄面板内换行 */}
           <Select
             value={playMode}
             onValueChange={(v) => onPlayModeChange(v as MediaPlayMode)}
           >
             <SelectTrigger
-              className="h-6 w-[92px] text-[11px]"
+              className="h-6 w-8 px-1.5 text-[11px]"
+              title={t('playlist.playMode')}
               aria-label={t('playlist.playMode')}
             >
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="once">
-                <span className="flex items-center gap-1.5">
-                  <ListVideo className="h-3 w-3" />
-                  {t('playlist.modeOnce')}
-                </span>
+            <SelectContent className="min-w-0">
+              <SelectItem value="once" title={t('playlist.modeOnce')}>
+                <ListVideo className="h-3.5 w-3.5" />
               </SelectItem>
-              <SelectItem value="loopList">
-                <span className="flex items-center gap-1.5">
-                  <Repeat className="h-3 w-3" />
-                  {t('playlist.modeLoopList')}
-                </span>
+              <SelectItem value="loopList" title={t('playlist.modeLoopList')}>
+                <Repeat className="h-3.5 w-3.5" />
               </SelectItem>
-              <SelectItem value="loopOne">
-                <span className="flex items-center gap-1.5">
-                  <Repeat1 className="h-3 w-3" />
-                  {t('playlist.modeLoopOne')}
-                </span>
+              <SelectItem value="loopOne" title={t('playlist.modeLoopOne')}>
+                <Repeat1 className="h-3.5 w-3.5" />
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* 文件名显示模式：纯图标 + 悬浮提示 */}
+          <Select
+            value={nameMode}
+            onValueChange={(v) => onNameModeChange(v as MediaNameMode)}
+          >
+            <SelectTrigger
+              className="h-6 w-8 px-1.5 text-[11px]"
+              title={t('library.nameMode')}
+              aria-label={t('library.nameMode')}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="min-w-0">
+              <SelectItem value="custom" title={t('library.nameCustom')}>
+                <Pencil className="h-3.5 w-3.5" />
+              </SelectItem>
+              <SelectItem value="fileName" title={t('library.nameFileName')}>
+                <FileText className="h-3.5 w-3.5" />
+              </SelectItem>
+              <SelectItem value="tagTitle" title={t('library.nameTagTitle')}>
+                <Tag className="h-3.5 w-3.5" />
+              </SelectItem>
+              <SelectItem value="tagAlbum" title={t('library.nameTagAlbum')}>
+                <Disc className="h-3.5 w-3.5" />
               </SelectItem>
             </SelectContent>
           </Select>
@@ -335,7 +402,7 @@ export default function PlaylistPanel({
                   <VideoIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                 )}
                 <span className="min-w-0 flex-1 truncate" title={media.path}>
-                  {media.name}
+                  {displayLabel(media)}
                 </span>
               </div>
             );

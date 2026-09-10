@@ -104,7 +104,14 @@
     "emptyDesc": "点击工具栏「收藏当前媒体」，或在最近播放记录上右键收藏；收藏后可建分类目录归档管理",
     "sortByName": "按名称排序",
     "sortByAdded": "按添加顺序",
-    "more": "更多操作"
+    "more": "更多操作",
+    "dropHint": "收藏到媒体库",
+    "dropAdded": "已收藏 {{n}} 个媒体文件",
+    "nameMode": "显示名称",
+    "nameCustom": "自定义名称",
+    "nameFileName": "文件名",
+    "nameTagTitle": "标签标题",
+    "nameTagAlbum": "专辑名"
   },
   "playlist": {
     "newGroup": "新建分组",
@@ -122,7 +129,8 @@
     "empty": "暂无播放分组",
     "emptyDesc": "点击「新建分组」创建播放列表，再从媒体库右键添加媒体",
     "emptyList": "该分组暂无媒体，可从媒体库右键「添加到播放列表」",
-    "playing": "列表 {{index}}/{{count}}"
+    "playing": "列表 {{index}}/{{count}}",
+    "defaultName": "新建播放列表"
   },
   "meta": {
     "title": "媒体元信息",
@@ -132,7 +140,25 @@
     "pathLabel": "文件路径",
     "kindVideo": "视频",
     "kindAudio": "音频",
-    "saved": "元信息已更新"
+    "saved": "元信息已更新",
+    "embedded": "文件内嵌元信息",
+    "containerLabel": "容器:",
+    "reading": "正在读取…",
+    "readFail": "未能读取该文件的内嵌元信息（容器可能不支持）",
+    "tagTitle": "标题",
+    "tagArtist": "艺术家 / 主演",
+    "tagAlbum": "专辑 / 影片",
+    "tagDate": "年份 / 日期",
+    "tagComment": "备注",
+    "cover": "封面图",
+    "noCover": "无内嵌封面",
+    "coverReplace": "替换封面…",
+    "coverRemove": "移除封面",
+    "coverKeep": "保留当前",
+    "embeddedSaved": "内嵌元信息已无损写入文件",
+    "embeddedFailed": "写入失败：{{error}}",
+    "writing": "正在写入…",
+    "presetLabel": "预设样式"
   },
   "recent": {
     "title": "最近播放",
@@ -172,7 +198,15 @@
     "updated": "分组已更新",
     "rowDelete": "删除该组（组内句子回到未分组）",
     "moveUp": "上移（调小序号）",
-    "moveDown": "下移（调大序号）"
+    "moveDown": "下移（调大序号）",
+    "assignSub": "归入分组",
+    "assignTo": "归入「{{label}}」",
+    "newCueGroup": "归入新建组…",
+    "assignMulti": "归入分组（{{n}} 句）",
+    "assignedMulti": "已将 {{n}} 句归入「{{label}}」",
+    "playGroup": "播放分组",
+    "playGroupItem": "{{label}}（{{n}} 句）",
+    "playingGroup": "开始播放「{{label}}」"
   },
   "fav": {
     "title": "收藏",
@@ -196,7 +230,9 @@
     "count": "{{n}} 句",
     "empty": "收藏还是空的",
     "emptyDesc": "在字幕句上右键选择「收藏此句」；收藏会记录来源字幕文件与时间戳，点击即可定位回播",
-    "filterEmpty": "该分组暂无收藏句"
+    "filterEmpty": "该分组暂无收藏句",
+    "addMulti": "收藏所选 {{n}} 句",
+    "addedMulti": "已收藏 {{n}} 句"
   },
   "edit": {
     "section": "字幕编辑",
@@ -216,5 +252,55 @@
     "splitInvalid": "请把光标放在有效的拆分位置（左右都要有文字）",
     "splitDone": "已分拆为 {{n}} 句"
   },
-  "abGapInvalid": "B 点需在 A 点之后（至少 0.3 秒）"
+  "abGapInvalid": "B 点需在 A 点之后（至少 0.3 秒）",
+  "vmenu": {
+    "showTransport": "显示播放控制栏",
+    "hideTransport": "隐藏播放控制栏",
+    "showSubtitle": "显示字幕",
+    "hideSubtitle": "隐藏字幕",
+    "speed": "播放速度",
+    "playControl": "播放控制",
+    "prevFrame": "上一帧",
+    "nextFrame": "下一帧",
+    "screenshot": "截图（当前帧）",
+    "subtitleStyle": "字幕样式设置"
+  },
+  "shot": {
+    "fail": "无法截取当前帧画面",
+    "saved": "截图已保存到下载目录"
+  },
+  "speedNote": "3x 用于快速预览画面定位",
+  "gap": {
+    "label": "循环间隔",
+    "none": "无间隔",
+    "seconds": "{{n}} 秒",
+    "title": "循环间隔时间",
+    "hint": "每次循环到尾后暂停该时长再继续"
+  },
+  "style": {
+    "reset": "重置样式",
+    "presetLabel": "预设样式",
+    "font": "字体",
+    "fontSize": "字号",
+    "fontColor": "字体颜色",
+    "position": "位置",
+    "textStyle": "文字样式",
+    "outline": "描边",
+    "shadow": "阴影",
+    "marginShort": "边距",
+    "autoWrap": "自动换行"
+  },
+  "prop": {
+    "title": "媒体文件属性",
+    "menuItem": "属性",
+    "duration": "时长",
+    "bitrate": "码率",
+    "fileSize": "文件大小",
+    "videoCodec": "视频编码",
+    "resolution": "分辨率",
+    "audioCodec": "音频编码",
+    "sampleRate": "采样率",
+    "openLocation": "打开所在位置",
+    "container": "容器"
+  }
 }

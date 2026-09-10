@@ -29,6 +29,7 @@ import { setupAppMenu } from './helpers/menu';
 import { setupWindowCloseBehavior, markQuitting } from './helpers/windowClose';
 import { setupParameterHandlers } from './helpers/ipcParameterHandlers';
 import { setupRepeatLibraryDb } from './helpers/repeatLibraryDb';
+import { setupMediaMetaHandlers } from './helpers/mediaMeta';
 import { setupProofreadHandlers } from './helpers/ipcProofreadHandlers';
 import { setupSubtitleMergeHandlers } from './helpers/ipcSubtitleMergeHandlers';
 import { setupDubbingHandlers } from './helpers/ipcDubbingHandlers';
@@ -167,7 +168,11 @@ app.on('before-quit', (event) => {
     const url = request.url.substr(8).split('?')[0]; // 移除 "media://" 部分
     try {
       const decodedUrl = decodeURIComponent(url);
-      return callback({ path: decodedUrl });
+      // ACAO 头：让渲染层 canvas 可捕获 media:// 视频帧（截图功能），不被同源策略污染
+      return callback({
+        path: decodedUrl,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      });
     } catch (error) {
       console.error('Protocol handler error:', error);
       return callback({ error: -2 });
@@ -188,6 +193,7 @@ app.on('before-quit', (event) => {
   applyProxyFromSettings();
   setupParameterHandlers();
   setupRepeatLibraryDb();
+  setupMediaMetaHandlers();
   setupProofreadHandlers();
   registerAddonIpcHandlers();
 
