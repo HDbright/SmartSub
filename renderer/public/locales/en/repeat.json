@@ -85,7 +85,8 @@
     "shadowAutoStop": "Recording limit reached (cue + 3s), auto-stopped",
     "speedSet": "Speed: {{speed}}x",
     "abNotSet": "AB points not set yet",
-    "setAFirst": "Set the loop start point (A) first"
+    "setAFirst": "Set the loop start point (A) first",
+    "abAdjusted": "Point {{point}} moved to {{time}}"
   },
   "toggleWave": "Show/hide waveform",
   "toggleList": "Show/hide subtitle panel",

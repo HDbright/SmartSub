@@ -1840,6 +1840,9 @@ export default function RepeatWorkbench({
       syncAb();
       engineSeek(aSafe + 0.001);
       if (v && v.paused) void v.play().catch(() => {});
+      toast.info(
+        t('toast.abAdjusted', { point: 'A', time: formatClock(aSafe) }),
+      );
     } else {
       const b =
         Math.round(
@@ -1849,6 +1852,14 @@ export default function RepeatWorkbench({
       const bSafe = Math.max(b, (ab.a ?? 0) + 0.3);
       abRef.current = { ...ab, b: bSafe };
       syncAb();
+      // 播放头已越过新 B：立即从 A 重新开始循环（不等 timeupdate/间隔，避免观感卡顿后突跳）
+      if (v && !v.seeking && v.currentTime >= bSafe - 0.02 && ab.a != null) {
+        engineSeek(ab.a + 0.001);
+        if (v.paused) void v.play().catch(() => {});
+      }
+      toast.info(
+        t('toast.abAdjusted', { point: 'B', time: formatClock(bSafe) }),
+      );
     }
   };
 
@@ -2541,6 +2552,7 @@ export default function RepeatWorkbench({
     code: string;
     actionId: string;
     timer: ReturnType<typeof setTimeout>;
+    ranOnPress: boolean;
   } | null>(null);
   // 同一键码最近一次按下时间（设备连发帧去抖）
   const bleLastPressRef = useRef<Record<string, number>>({});
@@ -2642,33 +2654,34 @@ export default function RepeatWorkbench({
         const code = payload.value;
         const nowMs = Date.now();
         if (code === '00') {
-          // 松开帧：长按未触发过 → 执行常规动作；已触发（如长按清除）→ 不再执行
+          // 松开帧：仅当按下时未执行过（延迟型长按）才补执行；已执行过则忽略
           const h = bleHoldRef.current;
           if (h) {
             if (h.timer) clearTimeout(h.timer);
             bleHoldRef.current = null;
-            runAction(h.actionId);
+            if (!h.ranOnPress) runAction(h.actionId);
           }
           return;
         }
         // 设备连发去抖：同一键码 300ms 内的重复按下帧忽略
         if (nowMs - (bleLastPressRef.current[code] || 0) < 300) return;
         bleLastPressRef.current[code] = nowMs;
-        // 按下帧：上一键仍在长按判定中又被新键按下 → 取消判定并执行原动作
+        // 按下帧：上一键仍在长按判定中又被新键按下 → 取消判定；未执行过的补执行
         if (bleHoldRef.current) {
           const h = bleHoldRef.current;
           if (h.timer) clearTimeout(h.timer);
           bleHoldRef.current = null;
-          runAction(h.actionId);
+          if (!h.ranOnPress) runAction(h.actionId);
         }
         const actionId = bleMapRef.current[code];
         if (!actionId) return;
         if (actionId === 'bFwd' && abRef.current.b != null) {
-          // B+ 按下立即 +0.5s（确定性移动）；按住满 1 秒追加清除 AB
+          // B+ 按下立即 +0.5s（松开不重复执行）；按住满 1 秒追加清除 AB
           runAction('bFwd');
           bleHoldRef.current = {
             code,
             actionId,
+            ranOnPress: true,
             timer: setTimeout(() => {
               bleHoldRef.current = null;
               stopAb();

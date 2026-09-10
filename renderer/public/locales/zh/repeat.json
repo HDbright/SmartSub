@@ -85,7 +85,8 @@
     "shadowAutoStop": "录音已达上限（句长 + 3 秒），自动结束",
     "speedSet": "变速：{{speed}}x",
     "abNotSet": "尚未设置 AB 复读点",
-    "setAFirst": "请先设置 AB 循环播放的起始 A 点"
+    "setAFirst": "请先设置 AB 循环播放的起始 A 点",
+    "abAdjusted": "{{point}} 点已调整至 {{time}}"
   },
   "toggleWave": "显示/隐藏波形条",
   "toggleList": "显示/隐藏字幕列表",
