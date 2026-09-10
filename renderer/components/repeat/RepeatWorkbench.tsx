@@ -2437,22 +2437,38 @@ export default function RepeatWorkbench({
     stopShadowWatcher();
   };
 
-  /** 手柄键：跟读录音（播原句→句尾自动录音→超时/手动结束→自动回放序列） */
+  /** 跟读/对比目标段：AB 循环激活 → AB 区间；否则当前字幕句 */
+  const resolveShadowSegment = (): { start: number; end: number } | null => {
+    const ab = abRef.current;
+    if (ab.state === 'loop' && ab.a != null && ab.b != null) {
+      return { start: ab.a, end: Math.max(ab.b, ab.a + 0.3) };
+    }
+    const i = activeCueIndex;
+    if (i >= 0 && cues[i]) {
+      return {
+        start: cues[i].start,
+        end: Math.max(cues[i].end, cues[i].start + 0.3),
+      };
+    }
+    return null;
+  };
+
+  /** 手柄键：跟读录音（AB 循环激活跟读 AB 区间，否则当前句；播完句尾自动录音→超时/手动结束→自动回放序列） */
   const toggleShadow = () => {
     if (shadowPhaseRef.current === 'rec') {
       stopShadowRecording(); // 手动提前结束，仍走自动回放序列
       return;
     }
     if (shadowPhaseRef.current !== 'idle') haltShadowPlayback();
-    const i = activeCueIndex;
-    if (i < 0 || !cues[i]) {
+    const seg = resolveShadowSegment();
+    if (!seg) {
       toast.warning(t('toast.shadowNeedCue'));
       return;
     }
     if (singleRepeatRef.current) setSingleRepeat(false);
     stopAll();
     compareRef.current = false;
-    playOrigSegment(cues[i].start, Math.max(cues[i].end, cues[i].start + 0.3));
+    playOrigSegment(seg.start, seg.end);
     setPhase('orig');
     startShadowWatcher();
     toast.info(t('toast.shadowStart'));
