@@ -2521,22 +2521,22 @@ export default function RepeatWorkbench({
     {
       id: 'aBack',
       label: t('remote.aABack'),
-      run: () => adjustAbPoint('a', -0.5),
+      run: () => adjustAbPoint('a', -0.3),
     },
     {
       id: 'aFwd',
       label: t('remote.aAFwd'),
-      run: () => adjustAbPoint('a', 0.5),
+      run: () => adjustAbPoint('a', 0.3),
     },
     {
       id: 'bBack',
       label: t('remote.aBBack'),
-      run: () => adjustAbPoint('b', -0.5),
+      run: () => adjustAbPoint('b', -0.3),
     },
     {
       id: 'bFwd',
       label: t('remote.aBFwd'),
-      run: () => adjustAbPoint('b', 0.5),
+      run: () => adjustAbPoint('b', 0.3),
     },
     {
       id: 'speedCycle',
