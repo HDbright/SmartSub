@@ -2446,12 +2446,6 @@ export default function RepeatWorkbench({
       label: t('remote.aSeekFwd'),
       run: () => seekTo(currentTime + 5),
     },
-    { id: 'setA', label: t('remote.aSetA'), run: () => setPointA() },
-    {
-      id: 'setB',
-      label: t('remote.aSetB'),
-      run: () => (abRef.current.state === 'pickB' ? setPointB() : setPointA()),
-    },
     {
       id: 'clearAB',
       label: t('remote.aClearAB'),
@@ -2661,11 +2655,7 @@ export default function RepeatWorkbench({
         if (!actionId) return;
         // 长按清除 AB：B+ 键按住 1 秒、B 点键按住 2 秒（AB 循环激活时）
         const holdMs =
-          actionId === 'bFwd' && abRef.current.b != null
-            ? 1000
-            : actionId === 'setB' && abRef.current.b != null
-              ? 2000
-              : 0;
+          actionId === 'bFwd' && abRef.current.b != null ? 1000 : 0;
         if (holdMs > 0) {
           bleHoldRef.current = {
             code: payload.value,
