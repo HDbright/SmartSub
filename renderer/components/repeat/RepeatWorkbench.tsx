@@ -180,8 +180,8 @@ const DEFAULT_REMOTE_MAP: Record<string, string> = {
   mediaplaypause: 'playPause',
   mediatrackprevious: 'prevCue',
   mediatracknext: 'nextCue',
-  mediarewind: 'frameBack',
-  mediafastforward: 'frameFwd',
+  mediarewind: 'seekBack',
+  mediafastforward: 'seekFwd',
   mediastop: 'stop',
 };
 
@@ -2421,12 +2421,6 @@ export default function RepeatWorkbench({
     { id: 'playPause', label: t('remote.aPlayPause'), run: () => togglePlay() },
     { id: 'prevCue', label: t('remote.aPrevCue'), run: () => locateCue(-1) },
     { id: 'nextCue', label: t('remote.aNextCue'), run: () => locateCue(1) },
-    {
-      id: 'frameBack',
-      label: t('remote.aFrameBack'),
-      run: () => stepFrame(-1),
-    },
-    { id: 'frameFwd', label: t('remote.aFrameFwd'), run: () => stepFrame(1) },
     {
       id: 'seekBack',
       label: t('remote.aSeekBack'),
