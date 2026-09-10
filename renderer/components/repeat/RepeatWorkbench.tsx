@@ -2286,6 +2286,8 @@ export default function RepeatWorkbench({
   const compareRef = useRef(false);
   const shadowTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const gapUntilRef = useRef(0);
+  // 对比循环间隔后下一步播谁（原声 ↔ 录音交替的关键）
+  const gapNextRef = useRef<'orig' | 'rec'>('rec');
   const [recStream, setRecStream] = useState<MediaStream | null>(null);
 
   const stopShadowWatcher = () => {
@@ -2321,7 +2323,8 @@ export default function RepeatWorkbench({
             setPhase('idle');
           }
         } else if (compareRef.current) {
-          // 对比循环：录音播完 → 间隔 repeatGap → 回到原句
+          // 对比循环：录音播完 → 间隔 repeatGap → 回到原声
+          gapNextRef.current = 'orig';
           gapUntilRef.current = Date.now() + repeatGap * 1000;
           setPhase('gap');
         } else {
@@ -2395,6 +2398,7 @@ export default function RepeatWorkbench({
           } else if (ph === 'post-orig') {
             setPhase('idle');
           } else {
+            gapNextRef.current = 'rec';
             gapUntilRef.current = Date.now() + repeatGap * 1000;
             setPhase('gap');
           }
@@ -2410,7 +2414,18 @@ export default function RepeatWorkbench({
           stopShadowRecording();
         }
       } else if (ph === 'gap') {
-        if (Date.now() >= gapUntilRef.current) playShadowRecording('cmp-rec');
+        if (Date.now() < gapUntilRef.current) return;
+        if (gapNextRef.current === 'rec') {
+          playShadowRecording('cmp-rec');
+        } else {
+          // 间隔结束 → 播原声段
+          if (compareRef.current && cue && v) {
+            playOrigSegment(cue.start, cue.end);
+            setPhase('cmp-orig');
+          } else {
+            setPhase('idle');
+          }
+        }
       }
     }, 80);
   };
@@ -2472,6 +2487,7 @@ export default function RepeatWorkbench({
       return;
     }
     compareRef.current = true;
+    gapNextRef.current = 'rec';
     playOrigSegment(cue.start, cue.end);
     setPhase('cmp-orig');
     startShadowWatcher();
