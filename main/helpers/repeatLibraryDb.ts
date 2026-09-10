@@ -107,18 +107,24 @@ function resolveWasmPath(): string {
 }
 
 function rowsToObjects(res: any): any[] {
-  // sql.js 对空表（无行）返回 []：res[0]/res[1] 均为 undefined，必须按空结果处理，
-  // 否则任意一张空表都会让 loadAll 崩溃 → 渲染层空载 → 保存时覆盖整库（数据销毁链）
+  // sql.js 的 exec 返回 [{ columns: string[], values: any[][] }] —— 每个结果集一个对象；
+  // 空表/无行时结果集内 values 为空数组，甚至整个返回 []。此前误按 [列, 行] 二元组解析，
+  // res[1] 恒为 undefined 导致每次 SELECT 必崩、加载从未成功过。
   if (!res || !res.length) return [];
-  const columns = res[0];
-  const values = res[1];
-  return values.map((row: any[]) => {
-    const obj: Record<string, any> = {};
-    columns.forEach((col: string, i: number) => {
-      obj[col] = row[i];
-    });
-    return obj;
-  });
+  const out: any[] = [];
+  for (const set of res) {
+    const columns = set?.columns;
+    const values = set?.values;
+    if (!columns || !values) continue;
+    for (const row of values) {
+      const obj: Record<string, any> = {};
+      columns.forEach((col: string, i: number) => {
+        obj[col] = row[i];
+      });
+      out.push(obj);
+    }
+  }
+  return out;
 }
 
 function queryAll(sql: string): any[] {
