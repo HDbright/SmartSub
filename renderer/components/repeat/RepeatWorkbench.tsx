@@ -2425,6 +2425,12 @@ export default function RepeatWorkbench({
     setPhase(phase);
   };
 
+  /** 进入对比循环：自动展开大波形并放大定位到跟读段，方便与录音波形对照 */
+  const openWaveForCompare = (start: number, end: number) => {
+    if (!showWave) setShowWave(true);
+    zoomToAB(start, end); // 内部会 setZoomOpen(true) 并把缩放窗口对准该区间
+  };
+
   /** 进入对比循环：原声腿起播，随后按间隔在原声 ↔ 录音间交替 */
   const enterCompareLoop = () => {
     const cue = shadowCueRef.current;
@@ -2437,6 +2443,7 @@ export default function RepeatWorkbench({
     playOrigSegment(cue.start, cue.end);
     setPhase('cmp-orig');
     startShadowWatcher();
+    openWaveForCompare(cue.start, cue.end);
   };
 
   const startShadowRecording = async () => {
