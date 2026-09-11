@@ -2311,6 +2311,9 @@ export default function RepeatWorkbench({
     ab: { a: number; b: number } | null;
   } | null>(null);
   const [recStream, setRecStream] = useState<MediaStream | null>(null);
+  // 录音智能停止：最近一次出声时间 / 是否已经开口说过
+  const recLastVoiceAtRef = useRef(0);
+  const recSpokeRef = useRef(false);
   // 原声段波形峰值：从全曲峰值包络（peaks.max）中切出当前跟读/对比目标段
   const origSegmentPeaks = useMemo(() => {
     const cue = shadowCueRef.current;
@@ -2478,6 +2481,8 @@ export default function RepeatWorkbench({
       rec.start();
       recorderRef.current = rec;
       recStartRef.current = Date.now();
+      recLastVoiceAtRef.current = Date.now();
+      recSpokeRef.current = false;
       setRecStream(stream);
       setPhase('rec');
       toast.info(t('toast.shadowRecording'));
@@ -2519,12 +2524,20 @@ export default function RepeatWorkbench({
           }
         }
       } else if (ph === 'rec') {
-        // 录音时长超过「段长 + 3 秒」自动结束
-        const limitSec = (cue ? cue.end - cue.start : 10) + 3;
+        // 智能停止：出过声且静音超过 1.2 秒 → 自动结束录音（收完最后一句话）；
+        // 硬上限「段长 + 6 秒」防止无限录音
+        const limitSec = (cue ? cue.end - cue.start : 10) + 6;
+        const elapsedSec = (Date.now() - recStartRef.current) / 1000;
+        const quietSec = (Date.now() - recLastVoiceAtRef.current) / 1000;
         if (
           recorderRef.current &&
-          Date.now() - recStartRef.current > limitSec * 1000
+          recSpokeRef.current &&
+          quietSec > 1.2 &&
+          elapsedSec > (cue ? cue.end - cue.start : 0) + 0.5
         ) {
+          toast.info(t('toast.shadowAutoStop'));
+          stopShadowRecording();
+        } else if (elapsedSec > limitSec) {
           toast.info(t('toast.shadowAutoStop'));
           stopShadowRecording();
         }
@@ -4157,6 +4170,12 @@ export default function RepeatWorkbench({
                       audioEl={shadowAudioRef.current}
                       audioUrl={shadowUrlRef.current}
                       playheadColor="#ef4444"
+                      onLevel={(lv) => {
+                        if (lv > 0.12) {
+                          recSpokeRef.current = true;
+                          recLastVoiceAtRef.current = Date.now();
+                        }
+                      }}
                       label={
                         shadowPhase === 'rec'
                           ? t('toast.shadowRecording')

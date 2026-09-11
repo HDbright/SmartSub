@@ -22,6 +22,8 @@ interface Props {
   progressFn?: () => number | null;
   /** 播放头颜色 */
   playheadColor?: string;
+  /** live 模式每帧上报当前电平（0..1，已放大），供静音检测 */
+  onLevel?: (level: number) => void;
 }
 
 const GREEN = '#4aa96c';
@@ -49,6 +51,7 @@ export default function RecordWaveStrip({
   peaks: peaksProp,
   progressFn,
   playheadColor = 'rgba(255, 255, 255, 0.9)',
+  onLevel,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const peaksRef = useRef<number[]>([]);
@@ -108,6 +111,7 @@ export default function RecordWaveStrip({
     src.connect(analyser);
     const data = new Uint8Array(analyser.fftSize);
     const hist: number[] = [];
+    let frame = 0;
     let raf = 0;
 
     const draw = () => {
@@ -121,6 +125,8 @@ export default function RecordWaveStrip({
           sum += v * v;
         }
         const level = Math.min(1, Math.sqrt(sum / data.length) * 3.2);
+        frame++;
+        if (frame % 3 === 0) onLevel?.(level);
         hist.push(level);
         const bars = Math.max(40, Math.floor(w / 4));
         while (hist.length > bars) hist.shift();
@@ -143,7 +149,7 @@ export default function RecordWaveStrip({
       cancelAnimationFrame(raf);
       void ctx.close().catch(() => {});
     };
-  }, [mode, stream]);
+  }, [mode, stream, onLevel]);
 
   // file 模式：静态波形 + 播放头（每帧重绘，自动适配尺寸）
   useEffect(() => {
