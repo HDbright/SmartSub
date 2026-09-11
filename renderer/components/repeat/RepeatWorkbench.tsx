@@ -79,6 +79,7 @@ import { useHotkeys } from 'hooks/useHotkeys';
 import SubtitlePreviewOverlay from '@/components/subtitleMerge/SubtitlePreviewOverlay';
 import InteractiveSubtitleOverlay from './InteractiveSubtitleOverlay';
 import ShadowRecordingOverlay from './ShadowRecordingOverlay';
+import RecordWaveStrip from './RecordWaveStrip';
 import RemoteMapDialog, { type RemoteActionDef } from './RemoteMapDialog';
 import {
   LIBASS_SRT_PLAYRES_Y,
@@ -4083,6 +4084,22 @@ export default function RepeatWorkbench({
             {/* 波形区（可整块隐藏） */}
             {showWave && (
               <>
+                {/* 跟读录音波形条：录音中=麦克风实时波形；对比播放=跟读录音波形（原声大波形在下方对照） */}
+                {(shadowPhase === 'rec' ||
+                  ['cmp-orig', 'cmp-rec', 'gap'].includes(shadowPhase)) && (
+                  <RecordWaveStrip
+                    className="h-20"
+                    mode={shadowPhase === 'rec' ? 'live' : 'file'}
+                    stream={recStream}
+                    audioEl={shadowAudioRef.current}
+                    audioUrl={shadowUrlRef.current}
+                    label={
+                      shadowPhase === 'rec'
+                        ? t('toast.shadowRecording')
+                        : t('remote.aCompare')
+                    }
+                  />
+                )}
                 {/* 大波形（缩放视图） */}
                 {zoomOpen && (
                   <div className="relative h-36 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-slate-950">
