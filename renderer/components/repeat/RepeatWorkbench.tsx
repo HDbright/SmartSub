@@ -2453,6 +2453,8 @@ export default function RepeatWorkbench({
   const startShadowRecording = async () => {
     // 提示音期间若已取消跟读（阶段被复位），不再启动录音
     if (shadowPhaseRef.current !== 'cue') return;
+    // 录音启动前强制暂停视频：确保录音期间没有任何原声回放
+    videoRef.current?.pause();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const rec = new MediaRecorder(stream);
