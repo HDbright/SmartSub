@@ -274,7 +274,7 @@ export default function RemoteMapDialog({
         <div className="space-y-1.5 rounded-md border border-border p-2">
           <div className="flex items-center gap-2">
             {bleConnected ? (
-              <BluetoothConnected className="h-4 w-4 text-emerald-500" />
+              <BluetoothConnected className="h-4 w-4 text-blue-500" />
             ) : bleRunning ? (
               <Bluetooth className="h-4 w-4 animate-pulse text-amber-500" />
             ) : (
@@ -285,7 +285,7 @@ export default function RemoteMapDialog({
               className={cn(
                 'text-[11px]',
                 bleConnected
-                  ? 'text-emerald-500'
+                  ? 'text-blue-500'
                   : bleRunning
                     ? 'text-amber-500'
                     : 'text-muted-foreground',
