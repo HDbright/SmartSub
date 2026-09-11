@@ -2317,8 +2317,18 @@ export default function RepeatWorkbench({
     const i0 = Math.max(0, Math.floor((cue.start / duration) * n));
     const i1 = Math.min(n, Math.ceil((cue.end / duration) * n));
     if (i1 <= i0) return null;
+    // 重采样为固定 800 桶（与录音波形同粒度），取 max/min 双包络幅值
+    const span = i1 - i0;
     const out: number[] = [];
-    for (let i = i0; i < i1; i++) out.push(peaks.max[i]);
+    for (let i = 0; i < 800; i++) {
+      const s = i0 + Math.floor((i * span) / 800);
+      const e = Math.max(s + 1, i0 + Math.floor(((i + 1) * span) / 800));
+      let m = 0;
+      for (let j = s; j < e && j < n; j++) {
+        m = Math.max(m, peaks.max[j], -peaks.min[j]);
+      }
+      out.push(m);
+    }
     return out;
     // shadowPhase 变化时重算（cue 快照在进入阶段时更新）
     // eslint-disable-next-line react-hooks/exhaustive-deps
