@@ -9,7 +9,9 @@ import { useTranslation } from 'next-i18next';
 import { useRouter } from 'next/router';
 import { toast } from 'sonner';
 import {
+  ArrowLeftRight,
   AudioLines,
+  Mic,
   Camera,
   Captions,
   ChevronDown,
@@ -4260,6 +4262,50 @@ export default function RepeatWorkbench({
                   {abUi.state === 'loop' && abUi.a != null && abUi.b != null
                     ? `AB ${formatClock(abUi.a)}-${formatClock(abUi.b)}`
                     : t('ab.button')}
+                </Button>
+                {/* 跟读录音：AB 循环激活=跟读 AB 区间，否则当前句；录音中高亮脉冲 */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleShadow}
+                  className={cn(
+                    'gap-1',
+                    shadowPhase === 'rec'
+                      ? 'animate-pulse border-sky-500/70 bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                      : ['orig', 'cue'].includes(shadowPhase)
+                        ? 'border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                        : '',
+                  )}
+                  title={
+                    shadowPhase === 'rec'
+                      ? t('toast.shadowRecording')
+                      : t('remote.aShadow')
+                  }
+                >
+                  <Mic className="h-3.5 w-3.5" />
+                  {shadowPhase === 'rec'
+                    ? t('remote.aShadow') + '…'
+                    : t('remote.aShadow')}
+                </Button>
+                {/* 原声对比：循环中高亮 */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleCompare}
+                  className={cn(
+                    'gap-1',
+                    ['cmp-orig', 'cmp-rec', 'gap'].includes(shadowPhase)
+                      ? 'border-primary/60 bg-primary/15 text-primary'
+                      : '',
+                  )}
+                  title={
+                    ['cmp-orig', 'cmp-rec', 'gap'].includes(shadowPhase)
+                      ? t('toast.compareStart')
+                      : t('remote.aCompare')
+                  }
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                  {t('remote.aCompare')}
                 </Button>
                 <Select
                   value={loopMode}
