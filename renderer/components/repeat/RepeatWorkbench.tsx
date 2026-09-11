@@ -2326,32 +2326,6 @@ export default function RepeatWorkbench({
   // 录音智能停止：最近一次出声时间 / 是否已经开口说过
   const recLastVoiceAtRef = useRef(0);
   const recSpokeRef = useRef(false);
-  // 原声段波形峰值：从全曲峰值包络（peaks.max）中切出当前跟读/对比目标段
-  const origSegmentPeaks = useMemo(() => {
-    const cue = shadowCueRef.current;
-    // 优先用高精度包络 finePeaks（与大波形放大视图同源数据），回退概览 peaks
-    const src = finePeaks || peaks;
-    if (!src || !src.n || !duration || !cue || duration <= 0) return null;
-    const n = src.n;
-    const i0 = Math.max(0, Math.floor((cue.start / duration) * n));
-    const i1 = Math.min(n, Math.ceil((cue.end / duration) * n));
-    if (i1 <= i0) return null;
-    // 重采样为固定 1200 桶（与显示宽度匹配），取 max/min 双包络幅值
-    const span = i1 - i0;
-    const out: number[] = [];
-    for (let i = 0; i < 3000; i++) {
-      const s0 = i0 + Math.floor((i * span) / 3000);
-      const s1 = Math.max(s0 + 1, i0 + Math.floor(((i + 1) * span) / 3000));
-      let m = 0;
-      for (let j = s0; j < s1 && j < n; j++) {
-        m = Math.max(m, src.max[j], -src.min[j]);
-      }
-      out.push(m);
-    }
-    return out;
-    // shadowPhase 变化时重算（cue 快照在进入阶段时更新）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finePeaks, peaks, duration, shadowPhase]);
 
   const stopShadowWatcher = () => {
     if (shadowTimerRef.current) {
@@ -4193,32 +4167,6 @@ export default function RepeatWorkbench({
                           ? t('toast.shadowRecording')
                           : t('remote.aCompare')
                       }
-                    />
-                    {/* 原声段波形条：与上方录音波形上下对照 */}
-                    <RecordWaveStrip
-                      className="h-20"
-                      mode="file"
-                      peaks={origSegmentPeaks}
-                      playheadColor="#f97316"
-                      progressFn={
-                        ['orig', 'cmp-orig'].includes(shadowPhase)
-                          ? () => {
-                              const v = videoRef.current;
-                              const cue = shadowCueRef.current;
-                              if (!v || !cue || cue.end <= cue.start)
-                                return null;
-                              return Math.max(
-                                0,
-                                Math.min(
-                                  1,
-                                  (v.currentTime - cue.start) /
-                                    (cue.end - cue.start),
-                                ),
-                              );
-                            }
-                          : null
-                      }
-                      label={t('remote.waveOrig')}
                     />
                   </>
                 )}
