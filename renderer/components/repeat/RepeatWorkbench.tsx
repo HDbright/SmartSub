@@ -2099,6 +2099,18 @@ export default function RepeatWorkbench({
     const v = videoRef.current;
     if (!v) return;
 
+    // 跟读/对比进行中的强制静默守卫：录音( cue/rec )与录音回放腿( cmp-rec )期间，
+    // 视频绝不允许出声——任何意外触发的播放都会被这里立刻压回去
+    if (
+      shadowActiveRef.current &&
+      (shadowPhaseRef.current === 'rec' ||
+        shadowPhaseRef.current === 'cue' ||
+        shadowPhaseRef.current === 'cmp-rec')
+    ) {
+      if (!v.paused) v.pause();
+      return;
+    }
+
     // 单句重复：绝对优先，在 setCurrentTime 之前处理，
     // 避免越界时间值先传入 React 导致字幕高亮/overlay 闪跳到下一句
     if (singleRepeatRef.current) {
