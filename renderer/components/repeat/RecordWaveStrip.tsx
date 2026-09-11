@@ -172,12 +172,20 @@ export default function RecordWaveStrip({
           const peaks = peaksProp ?? peaksRef.current;
           const n = peaks.length;
           if (n) {
-            const bw = w / n;
-            for (let i = 0; i < n; i++) {
-              const bh = Math.max(2, peaks[i] * h * 0.9);
-              const played = px != null && (i + 0.5) * bw <= px;
+            // 每物理像素聚合一个幅值列（与大波形同款算法）：锐利不混叠
+            const mid = h / 2;
+            for (let x = 0; x < w; x++) {
+              const s = Math.min(n - 1, Math.floor((x * n) / w));
+              const e = Math.max(
+                s + 1,
+                Math.min(n, Math.floor(((x + 1) * n) / w)),
+              );
+              let m = 0;
+              for (let j = s; j < e; j++) m = Math.max(m, peaks[j]);
+              const played = px != null && x + 0.5 <= px;
+              const bh = Math.max(2, m * h * 0.92);
               g.fillStyle = played ? GREEN_BRIGHT : GREEN;
-              g.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw), bh);
+              g.fillRect(x, mid - bh / 2, 1, bh);
             }
           }
           if (px != null) {

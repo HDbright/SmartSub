@@ -2322,9 +2322,9 @@ export default function RepeatWorkbench({
     // 重采样为固定 1200 桶（与显示宽度匹配），取 max/min 双包络幅值
     const span = i1 - i0;
     const out: number[] = [];
-    for (let i = 0; i < 1200; i++) {
-      const s0 = i0 + Math.floor((i * span) / 1200);
-      const s1 = Math.max(s0 + 1, i0 + Math.floor(((i + 1) * span) / 1200));
+    for (let i = 0; i < 3000; i++) {
+      const s0 = i0 + Math.floor((i * span) / 3000);
+      const s1 = Math.max(s0 + 1, i0 + Math.floor(((i + 1) * span) / 3000));
       let m = 0;
       for (let j = s0; j < s1 && j < n; j++) {
         m = Math.max(m, src.max[j], -src.min[j]);
