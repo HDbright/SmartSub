@@ -2320,7 +2320,7 @@ export default function RepeatWorkbench({
     // 重采样为固定 800 桶（与录音波形同粒度），取 max/min 双包络幅值
     const span = i1 - i0;
     const out: number[] = [];
-    for (let i = 0; i < 800; i++) {
+    for (let i = 0; i < 1200; i++) {
       const s = i0 + Math.floor((i * span) / 800);
       const e = Math.max(s + 1, i0 + Math.floor(((i + 1) * span) / 800));
       let m = 0;

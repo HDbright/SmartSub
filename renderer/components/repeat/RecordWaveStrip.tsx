@@ -1,8 +1,9 @@
 /**
  * 跟读录音波形条：
  * - live 模式：录音中，实时显示麦克风输入的滚动电平波形
- * - file 模式：对比播放，解码跟读录音 blob 绘制静态波形，并跟随回放画播放头
- * 置于原声大波形条上方，便于对照原声与跟读录音的波形差异。
+ * - file 模式：对比播放，绘制波形（外部峰值或解码跟读录音），并跟随回放画播放头
+ * canvas 按「元素实际尺寸 × 设备像素比」动态适配，波形锐利不模糊；
+ * 配色与 WaveformView 小波形条一致（未播绿 #4aa96c / 已播亮绿 #7fdba4）。
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -19,16 +20,24 @@ interface Props {
   peaks?: number[] | null;
   /** 播放头进度（0..1），每帧读取；返回 null 则不画播放头 */
   progressFn?: () => number | null;
-  /** 播放头颜色（默认白色） */
+  /** 播放头颜色 */
   playheadColor?: string;
 }
 
-const BARS = 220;
-const W = 1600;
-const H = 160;
-// 与小波形条（WaveformView overview）一致的绿系配色
 const GREEN = '#4aa96c';
 const GREEN_BRIGHT = '#7fdba4';
+
+/** 按 DPR 将 canvas 内部分辨率适配到元素实际尺寸（返回 {w,h}） */
+function fitCanvas(cv: HTMLCanvasElement): { w: number; h: number } {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(cv.clientWidth * dpr));
+  const h = Math.max(1, Math.round(cv.clientHeight * dpr));
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w;
+    cv.height = h;
+  }
+  return { w, h };
+}
 
 export default function RecordWaveStrip({
   mode,
@@ -43,7 +52,6 @@ export default function RecordWaveStrip({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const peaksRef = useRef<number[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [decoded, setDecoded] = useState(false);
 
   // file 模式：解码跟读录音 blob → 峰值数组
@@ -86,7 +94,7 @@ export default function RecordWaveStrip({
     };
   }, [mode, audioUrl]);
 
-  // live 模式：AnalyserNode 实时电平
+  // live 模式：AnalyserNode 实时电平滚动
   useEffect(() => {
     if (mode !== 'live' || !stream) return;
     const Ctx =
@@ -99,37 +107,31 @@ export default function RecordWaveStrip({
     analyser.fftSize = 512;
     src.connect(analyser);
     const data = new Uint8Array(analyser.fftSize);
-    const hist: number[] = new Array(BARS).fill(0);
+    const hist: number[] = [];
     let raf = 0;
 
     const draw = () => {
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = (data[i] - 128) / 128;
-        sum += v * v;
-      }
-      const level = Math.min(1, Math.sqrt(sum / data.length) * 3.2);
-      hist.push(level);
-      hist.shift();
       const cv = canvasRef.current;
       if (cv) {
+        const { w, h } = fitCanvas(cv);
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const level = Math.min(1, Math.sqrt(sum / data.length) * 3.2);
+        hist.push(level);
+        const bars = Math.max(40, Math.floor(w / 4));
+        while (hist.length > bars) hist.shift();
         const g = cv.getContext('2d');
         if (g) {
-          g.clearRect(0, 0, W, H);
-          const bw = W / BARS;
-          for (let i = 0; i < BARS; i++) {
-            const bh = Math.max(2, hist[i] * H * 0.9);
-            const grad = g.createLinearGradient(
-              0,
-              (H - bh) / 2,
-              0,
-              (H + bh) / 2,
-            );
-            grad.addColorStop(0, 'rgba(56, 189, 248, 0.95)');
-            grad.addColorStop(1, 'rgba(56, 189, 248, 0.3)');
-            g.fillStyle = grad;
-            g.fillRect(i * bw + 1, (H - bh) / 2, Math.max(1, bw - 2), bh);
+          g.clearRect(0, 0, w, h);
+          const bw = w / hist.length;
+          for (let i = 0; i < hist.length; i++) {
+            const bh = Math.max(2, hist[i] * h * 0.9);
+            g.fillStyle = 'rgba(56, 189, 248, 0.9)';
+            g.fillRect(i * bw + 0.5, (h - bh) / 2, Math.max(1, bw - 1.5), bh);
           }
         }
       }
@@ -143,42 +145,45 @@ export default function RecordWaveStrip({
     };
   }, [mode, stream]);
 
-  // file 模式：绘制静态波形 + 回放播放头
+  // file 模式：静态波形 + 播放头（每帧重绘，自动适配尺寸）
   useEffect(() => {
     if (mode !== 'file') return;
     let raf = 0;
     const draw = () => {
       const cv = canvasRef.current;
-      const g = cv?.getContext('2d');
-      if (cv && g) {
-        g.clearRect(0, 0, W, H);
-        // 播放头：录音回放（audioEl）或外部进度函数（原声段）
-        let px: number | null = null;
-        if (
-          audioEl &&
-          !audioEl.paused &&
-          isFinite(audioEl.duration) &&
-          audioEl.duration > 0
-        ) {
-          px = (audioEl.currentTime / audioEl.duration) * W;
-        } else if (progressFn) {
-          const pr = progressFn();
-          if (pr != null) px = pr * W;
-        }
-        const peaks = peaksProp ?? peaksRef.current;
-        if (peaks.length) {
-          const bw = W / peaks.length;
-          for (let i = 0; i < peaks.length; i++) {
-            const bh = Math.max(2, peaks[i] * H * 0.9);
-            // 配色与小波形条一致：播放头之前亮绿，之后绿
-            const played = px != null && (i + 0.5) * bw <= px;
-            g.fillStyle = played ? GREEN_BRIGHT : GREEN;
-            g.fillRect(i * bw + 0.5, (H - bh) / 2, Math.max(1, bw - 1), bh);
+      if (cv) {
+        const { w, h } = fitCanvas(cv);
+        const g = cv.getContext('2d');
+        if (g) {
+          g.clearRect(0, 0, w, h);
+          // 播放头：录音回放（audioEl）或外部进度函数（原声段）
+          let px: number | null = null;
+          if (
+            audioEl &&
+            !audioEl.paused &&
+            isFinite(audioEl.duration) &&
+            audioEl.duration > 0
+          ) {
+            px = (audioEl.currentTime / audioEl.duration) * w;
+          } else if (progressFn) {
+            const pr = progressFn();
+            if (pr != null) px = pr * w;
           }
-        }
-        if (px != null) {
-          g.fillStyle = playheadColor;
-          g.fillRect(Math.max(0, px - 1), 0, 2, H);
+          const peaks = peaksProp ?? peaksRef.current;
+          const n = peaks.length;
+          if (n) {
+            const bw = w / n;
+            for (let i = 0; i < n; i++) {
+              const bh = Math.max(2, peaks[i] * h * 0.9);
+              const played = px != null && (i + 0.5) * bw <= px;
+              g.fillStyle = played ? GREEN_BRIGHT : GREEN;
+              g.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw), bh);
+            }
+          }
+          if (px != null) {
+            g.fillStyle = playheadColor;
+            g.fillRect(Math.max(0, px - 1), 0, 2, h);
+          }
         }
       }
       raf = requestAnimationFrame(draw);
@@ -194,7 +199,7 @@ export default function RecordWaveStrip({
         className,
       )}
     >
-      <canvas ref={canvasRef} width={W} height={H} className="h-full w-full" />
+      <canvas ref={canvasRef} className="h-full w-full" />
       {label && (
         <span
           className={cn(
