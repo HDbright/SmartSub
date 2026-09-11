@@ -2954,12 +2954,11 @@ export default function RepeatWorkbench({
         const actionId = bleMapRef.current[code];
         if (!actionId) return;
         if (actionId === 'bFwd' && abRef.current.b != null) {
-          // B+ 按下立即 +0.5s（松开不重复执行）；按住满 1 秒追加清除 AB
-          runAction('bFwd');
+          // 长按满 1 秒 = 清除 AB（B 点位置不动）；短按松开 = B +0.5s
           bleHoldRef.current = {
             code,
             actionId,
-            ranOnPress: true,
+            ranOnPress: false,
             timer: setTimeout(() => {
               bleHoldRef.current = null;
               stopAb();
