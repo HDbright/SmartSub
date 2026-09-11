@@ -1726,11 +1726,12 @@ export default function RepeatWorkbench({
       clearTimeout(gapTimerRef.current);
       gapTimerRef.current = null;
     }
-    // 跟读/对比：停止循环与录音（录音保存但不自动回放）
+    // 跟读/对比：停止循环与录音（录音保存但不自动回放），并复位阶段状态
     haltShadowPlayback();
     if (recorderRef.current || shadowPhaseRef.current === 'rec') {
       stopShadowRecording(false);
     }
+    setPhase('idle');
     const v = videoRef.current;
     if (v && !v.paused) v.pause();
   };
@@ -2432,6 +2433,8 @@ export default function RepeatWorkbench({
   };
 
   const startShadowRecording = async () => {
+    // 提示音期间若已取消跟读（阶段被复位），不再启动录音
+    if (shadowPhaseRef.current !== 'cue') return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const rec = new MediaRecorder(stream);
@@ -2671,8 +2674,9 @@ export default function RepeatWorkbench({
       id: 'playPause',
       label: t('remote.aPlayPause'),
       run: () => {
-        // 对比循环中按播放键：退出对比并恢复进入前的播放模式
-        if (compareRef.current) {
+        // 跟读/对比进行中按播放键：结束跟读/对比（录音保存）并恢复进入前的播放模式
+        if (shadowActiveRef.current) {
+          if (recorderRef.current) stopShadowRecording(false);
           haltShadowPlayback();
           setPhase('idle');
           restorePreMode();
