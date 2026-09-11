@@ -10,6 +10,9 @@ if (process.env.NODE_ENV !== 'production') {
 
 import path from 'path';
 import * as fs from 'fs';
+
+// 跟读录音提示音在按键后数秒才播放（用户激活已过期）：放行自动播放策略
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 import { app, protocol, session, ipcMain } from 'electron';
 import serve from 'electron-serve';
 import { createWindow } from './helpers/create-window';

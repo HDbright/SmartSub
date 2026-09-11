@@ -2267,6 +2267,7 @@ export default function RepeatWorkbench({
   type ShadowPhase =
     | 'idle'
     | 'orig' // 原声段播放中（跟读预备/重录前原声）
+    | 'cue' // 播放「开始录音」提示音中
     | 'rec' // 录音中
     | 'cmp-orig' // 对比循环：原声腿
     | 'cmp-rec' // 对比循环：录音腿
@@ -2318,6 +2319,38 @@ export default function RepeatWorkbench({
     compareRef.current = false;
     shadowAudioRef.current?.pause();
     stopShadowWatcher();
+  };
+
+  /** 「开始录音」提示音：Web Audio 合成双短音（880Hz→1175Hz，约 0.3 秒） */
+  const playRecordCue = async () => {
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new Ctx();
+      if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const t0 = ctx.currentTime + 0.05;
+      osc.frequency.setValueAtTime(880, t0);
+      osc.frequency.setValueAtTime(1175, t0 + 0.15);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.4, t0 + 0.02);
+      gain.gain.setValueAtTime(0.4, t0 + 0.22);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+      osc.start(t0);
+      osc.stop(t0 + 0.34);
+      await new Promise<void>((resolve) => {
+        osc.onended = () => resolve();
+      });
+      void ctx.close().catch(() => {});
+    } catch {
+      // 提示音失败不阻断录音流程
+    }
   };
 
   const playOrigSegment = (start: number, end: number) => {
@@ -2424,7 +2457,9 @@ export default function RepeatWorkbench({
         if (v.currentTime >= cue.end - 0.02) {
           v.pause();
           if (ph === 'orig') {
-            void startShadowRecording();
+            // 播放「开始录音」提示音后再开始录音
+            setPhase('cue');
+            void playRecordCue().then(() => startShadowRecording());
           } else {
             gapNextRef.current = 'rec';
             gapUntilRef.current = Date.now() + repeatGap * 1000;
@@ -2554,9 +2589,10 @@ export default function RepeatWorkbench({
       return;
     }
     if (ph === 'orig') {
-      // 原声播放中再按：跳过剩余原声，立即开始录音
+      // 原声播放中再按：跳过剩余原声，播放提示音后开始录音
       videoRef.current?.pause();
-      void startShadowRecording();
+      setPhase('cue');
+      void playRecordCue().then(() => startShadowRecording());
       return;
     }
     const seg = resolveShadowSegment();
