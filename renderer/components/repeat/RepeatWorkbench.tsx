@@ -2308,6 +2308,7 @@ export default function RepeatWorkbench({
       pass: number;
       maxPass: number;
     } | null;
+    ab: { a: number; b: number } | null;
   } | null>(null);
   const [recStream, setRecStream] = useState<MediaStream | null>(null);
   // 原声段波形峰值：从全曲峰值包络（peaks.max）中切出当前跟读/对比目标段
@@ -2349,6 +2350,23 @@ export default function RepeatWorkbench({
     compareRef.current = false;
     shadowAudioRef.current?.pause();
     stopShadowWatcher();
+  };
+
+  /** 跟读/对比启动前：停队列与录音回放、暂停视频，但【保留 AB 循环点】
+   *  （跟读目标段即 AB 区间；AB 引擎由 shadowActiveRef 暂停让位） */
+  const stopForShadow = () => {
+    stopQueue();
+    if (gapTimerRef.current) {
+      clearTimeout(gapTimerRef.current);
+      gapTimerRef.current = null;
+    }
+    haltShadowPlayback();
+    if (recorderRef.current || shadowPhaseRef.current === 'rec') {
+      stopShadowRecording(false);
+    }
+    setPhase('idle');
+    const v = videoRef.current;
+    if (v && !v.paused) v.pause();
   };
 
   /** 「开始录音」提示音：Web Audio 合成双短音（880Hz→1175Hz，约 0.3 秒） */
@@ -2525,6 +2543,7 @@ export default function RepeatWorkbench({
   /** 记录当前播放模式快照（进入跟读/对比前调用） */
   const capturePreMode = () => {
     const q = queueRef.current;
+    const ab = abRef.current;
     preModeRef.current = {
       singleRepeat: singleRepeatRef.current,
       singleCue: singleRepeatCueRef.current
@@ -2540,6 +2559,7 @@ export default function RepeatWorkbench({
               maxPass: q.maxPass,
             }
           : null,
+      ab: ab.b != null && ab.a != null ? { a: ab.a, b: ab.b } : null,
     };
   };
 
@@ -2557,6 +2577,16 @@ export default function RepeatWorkbench({
       if (!singleRepeatCueRef.current && videoRef.current) {
         anchorSingleRepeatCue(videoRef.current.currentTime);
       }
+    }
+    if (m.ab && abRef.current.b == null) {
+      // 恢复 AB 循环点
+      abRef.current = {
+        state: 'loop',
+        a: m.ab.a,
+        b: m.ab.b,
+        repeats: Infinity,
+      };
+      syncAb();
     }
     if (m.queue) {
       queueRef.current = {
@@ -2634,7 +2664,7 @@ export default function RepeatWorkbench({
     }
     capturePreMode();
     if (singleRepeatRef.current) setSingleRepeat(false);
-    stopAll();
+    stopForShadow();
     compareRef.current = false;
     playOrigSegment(seg.start, seg.end);
     setPhase('orig');
@@ -2658,7 +2688,7 @@ export default function RepeatWorkbench({
     // 若从跟读流程直接进入（快照已在跟读启动时记录），保留该快照
     if (!preModeRef.current) capturePreMode();
     if (singleRepeatRef.current) setSingleRepeat(false);
-    stopAll();
+    stopForShadow();
     const cue = shadowCueRef.current ?? resolveShadowSegment();
     if (!cue) {
       toast.warning(t('toast.shadowNeedCue'));
