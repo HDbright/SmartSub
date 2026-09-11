@@ -1676,7 +1676,7 @@ export default function RepeatWorkbench({
     if (!v || !videoPath) return;
     const ph = shadowPhaseRef.current;
     if (ph === 'rec' || ph === 'gap') return; // 录音中/段间间隔：不响应
-    if (ph === 'cmp-rec' || ph === 'post-rec') {
+    if (ph === 'cmp-rec') {
       // 对比/回放的录音段：空格暂停/继续录音本身
       const a = shadowAudioRef.current;
       if (a) {
@@ -2257,23 +2257,27 @@ export default function RepeatWorkbench({
 
   // ---------- 快捷键（仅复读页可见时生效；保活挂载下切页后自动失能） ----------
   // ---------- 跟读录音 + 原声对比 ----------
-  // 跟读键：播放当前句 → 句尾自动录音；录音超过「句长+3 秒」自动结束（再按可提前结束）
-  //        → 自动回放录音 → 再播一遍原声后暂停；
-  // 对比键：原声 ↔ 录音轮流循环播放，段间间隔=全局循环间隔（repeatGap），
-  //        对比中可空格/点击暂停继续；再按对比键或停止键结束。
+  // 跟读键（空闲）：播目标段（AB 循环激活=AB 区间，否则当前字幕句）→ 句尾自动录音
+  //   → 录音结束（超过句长+3s 自动，或再按提前结束）→ 自动进入对比循环
+  // 跟读键（对比循环中）：再播一遍原声 → 重新录音 → 录完自动回到对比循环
+  // 跟读键（录音中）：提前结束录音（自动进入对比循环）
+  // 对比键：空闲且有录音 → 进入对比循环；对比循环中再按 = 停止对比
+  // 播放键：对比循环中按 = 退出对比并恢复进入前的播放模式（AB 循环/单句复读/勾选队列/顺序播放）
+  // 对比循环：原声 ↔ 录音反复交替，段间间隔 = 全局循环间隔（repeatGap）
   type ShadowPhase =
     | 'idle'
-    | 'orig' // 跟读：原句播放中
+    | 'orig' // 原声段播放中（跟读预备/重录前原声）
     | 'rec' // 录音中
-    | 'post-rec' // 录后自动回放录音
-    | 'post-orig' // 录后自动回放原句（播完暂停）
-    | 'cmp-orig' // 对比循环：原句
-    | 'cmp-rec' // 对比循环：录音
+    | 'cmp-orig' // 对比循环：原声腿
+    | 'cmp-rec' // 对比循环：录音腿
     | 'gap'; // 对比循环：段间间隔
   const [shadowPhase, setShadowPhase] = useState<ShadowPhase>('idle');
   const shadowPhaseRef = useRef<ShadowPhase>('idle');
+  // 跟读/对比进行中标记：让 AB 循环引擎暂时让位（避免句尾两套逻辑抢跳）
+  const shadowActiveRef = useRef(false);
   const setPhase = (ph: ShadowPhase) => {
     shadowPhaseRef.current = ph;
+    shadowActiveRef.current = ph !== 'idle';
     setShadowPhase(ph);
   };
   const shadowCueRef = useRef<{ start: number; end: number } | null>(null);
@@ -2309,10 +2313,18 @@ export default function RepeatWorkbench({
     }
   };
 
+  /** 停掉对比/回放类活动（不动录音状态与模式快照） */
+  const haltShadowPlayback = () => {
+    compareRef.current = false;
+    shadowAudioRef.current?.pause();
+    stopShadowWatcher();
+  };
+
   const playOrigSegment = (start: number, end: number) => {
     const v = videoRef.current;
     if (!v) return;
     shadowCueRef.current = { start, end };
+    shadowAudioRef.current?.pause(); // 单一音源：原声播放期间静默录音回放
     engineSeek(start + 0.001);
     void v.play().catch(() => {});
   };
@@ -2325,16 +2337,7 @@ export default function RepeatWorkbench({
     if (!shadowAudioRef.current) {
       const a = new Audio(shadowUrlRef.current);
       a.onended = () => {
-        if (shadowPhaseRef.current === 'post-rec') {
-          // 录后序列：回放完录音 → 再播一遍原声 → 播完暂停
-          const cue = shadowCueRef.current;
-          if (cue) {
-            playOrigSegment(cue.start, cue.end);
-            setPhase('post-orig');
-          } else {
-            setPhase('idle');
-          }
-        } else if (compareRef.current) {
+        if (compareRef.current) {
           // 对比循环：录音播完 → 间隔 repeatGap → 回到原声
           gapNextRef.current = 'orig';
           gapUntilRef.current = Date.now() + repeatGap * 1000;
@@ -2346,9 +2349,24 @@ export default function RepeatWorkbench({
       shadowAudioRef.current = a;
     }
     const a = shadowAudioRef.current;
+    videoRef.current?.pause(); // 单一音源：录音回放期间静默原声
     a.currentTime = 0;
     void a.play().catch(() => {});
     setPhase(phase);
+  };
+
+  /** 进入对比循环：原声腿起播，随后按间隔在原声 ↔ 录音间交替 */
+  const enterCompareLoop = () => {
+    const cue = shadowCueRef.current;
+    if (!cue) {
+      setPhase('idle');
+      return;
+    }
+    compareRef.current = true;
+    gapNextRef.current = 'rec'; // 原声播完 → 间隔 → 录音
+    playOrigSegment(cue.start, cue.end);
+    setPhase('cmp-orig');
+    startShadowWatcher();
   };
 
   const startShadowRecording = async () => {
@@ -2369,7 +2387,7 @@ export default function RepeatWorkbench({
         shadowUrlRef.current = URL.createObjectURL(blob);
         shadowAudioRef.current = null; // 下次回放按新录音重建
         toast.success(t('toast.shadowSaved'));
-        if (recAutoSeqRef.current) playShadowRecording('post-rec');
+        if (recAutoSeqRef.current) enterCompareLoop();
         else setPhase('idle');
       };
       rec.start();
@@ -2384,7 +2402,7 @@ export default function RepeatWorkbench({
     }
   };
 
-  /** autoSeq：结束后是否自动「回放录音→重播原声→暂停」 */
+  /** autoSeq：结束后是否自动进入对比循环 */
   const stopShadowRecording = (autoSeq = true) => {
     const rec = recorderRef.current;
     recorderRef.current = null;
@@ -2400,16 +2418,13 @@ export default function RepeatWorkbench({
       const ph = shadowPhaseRef.current;
       const v = videoRef.current;
       const cue = shadowCueRef.current;
-      if (ph === 'orig' || ph === 'post-orig' || ph === 'cmp-orig') {
+      if (ph === 'orig' || ph === 'cmp-orig') {
         if (!v || !cue) return;
-        // 仅按播放进度判定句尾：暂停=用户主动暂停，恢复后继续
+        // 仅按播放进度判定段尾：暂停=用户主动暂停，恢复后继续
         if (v.currentTime >= cue.end - 0.02) {
           v.pause();
           if (ph === 'orig') {
             void startShadowRecording();
-          } else if (ph === 'post-orig') {
-            setPhase('idle');
-            restorePreMode();
           } else {
             gapNextRef.current = 'rec';
             gapUntilRef.current = Date.now() + repeatGap * 1000;
@@ -2417,7 +2432,7 @@ export default function RepeatWorkbench({
           }
         }
       } else if (ph === 'rec') {
-        // 录音时长超过「句长 + 3 秒」自动结束
+        // 录音时长超过「段长 + 3 秒」自动结束
         const limitSec = (cue ? cue.end - cue.start : 10) + 3;
         if (
           recorderRef.current &&
@@ -2430,24 +2445,14 @@ export default function RepeatWorkbench({
         if (Date.now() < gapUntilRef.current) return;
         if (gapNextRef.current === 'rec') {
           playShadowRecording('cmp-rec');
+        } else if (compareRef.current && cue && v) {
+          playOrigSegment(cue.start, cue.end);
+          setPhase('cmp-orig');
         } else {
-          // 间隔结束 → 播原声段
-          if (compareRef.current && cue && v) {
-            playOrigSegment(cue.start, cue.end);
-            setPhase('cmp-orig');
-          } else {
-            setPhase('idle');
-          }
+          setPhase('idle');
         }
       }
     }, 80);
-  };
-
-  /** 停掉对比/回放类活动（不动录音状态） */
-  const haltShadowPlayback = () => {
-    compareRef.current = false;
-    shadowAudioRef.current?.pause();
-    stopShadowWatcher();
   };
 
   /** 记录当前播放模式快照（进入跟读/对比前调用） */
@@ -2471,7 +2476,7 @@ export default function RepeatWorkbench({
     };
   };
 
-  /** 恢复进入跟读/对比前的播放模式（单句复读/勾选队列/AB 循环/播放状态） */
+  /** 恢复进入跟读/对比前的播放模式（AB 循环/单句复读/勾选队列/播放状态） */
   const restorePreMode = () => {
     const m = preModeRef.current;
     preModeRef.current = null;
@@ -2521,18 +2526,37 @@ export default function RepeatWorkbench({
     return null;
   };
 
-  /** 手柄键：跟读录音（AB 循环激活跟读 AB 区间，否则当前句；播完句尾自动录音→超时/手动结束→自动回放序列）。
-   *  非空闲状态下再按 = 取消跟读并恢复进入前的播放模式（录音仍会保存）。 */
+  /** 手柄键：跟读录音。
+   *  空闲 → 播目标段后自动录音；
+   *  原声播放中 → 跳过剩余原声立即录音；
+   *  录音中 → 提前结束并自动进入对比循环；
+   *  对比循环中 → 再播一遍原声后重新录音，录完自动回到对比循环。 */
   const toggleShadow = () => {
-    if (shadowPhaseRef.current === 'rec') {
-      stopShadowRecording(false); // 取消：录音保存但不进入自动回放序列
-      restorePreMode();
+    const ph = shadowPhaseRef.current;
+    if (ph === 'rec') {
+      stopShadowRecording(); // 提前结束，自动进入对比循环
       return;
     }
-    if (shadowPhaseRef.current !== 'idle') {
-      haltShadowPlayback();
-      setPhase('idle');
-      restorePreMode();
+    if (compareRef.current) {
+      // 对比循环中重录：停录音回放 → 播一遍原声 → 重新录音 → 回到对比循环
+      compareRef.current = false;
+      shadowAudioRef.current?.pause();
+      stopShadowWatcher();
+      const cue = shadowCueRef.current;
+      if (!cue) {
+        setPhase('idle');
+        return;
+      }
+      playOrigSegment(cue.start, cue.end);
+      setPhase('orig');
+      startShadowWatcher();
+      toast.info(t('toast.shadowStart'));
+      return;
+    }
+    if (ph === 'orig') {
+      // 原声播放中再按：跳过剩余原声，立即开始录音
+      videoRef.current?.pause();
+      void startShadowRecording();
       return;
     }
     const seg = resolveShadowSegment();
@@ -2550,8 +2574,8 @@ export default function RepeatWorkbench({
     toast.info(t('toast.shadowStart'));
   };
 
-  /** 手柄键：原声 ↔ 录音循环对比（段间按全局循环间隔；再按/停止键结束）。
-   *  对比中再按 = 取消对比并恢复进入前的播放模式。 */
+  /** 手柄键：对比循环（需先有跟读录音）。
+   *  对比循环中再按 = 停止对比并恢复进入前的播放模式。 */
   const toggleCompare = () => {
     if (compareRef.current) {
       haltShadowPlayback();
@@ -2563,35 +2587,35 @@ export default function RepeatWorkbench({
       toast.warning(t('toast.compareNeedRec'));
       return;
     }
-    capturePreMode();
+    // 若从跟读流程直接进入（快照已在跟读启动时记录），保留该快照
+    if (!preModeRef.current) capturePreMode();
     if (singleRepeatRef.current) setSingleRepeat(false);
     stopAll();
-    const cue =
-      shadowCueRef.current ??
-      (activeCueIndex >= 0 && cues[activeCueIndex]
-        ? {
-            start: cues[activeCueIndex].start,
-            end: Math.max(
-              cues[activeCueIndex].end,
-              cues[activeCueIndex].start + 0.3,
-            ),
-          }
-        : null);
+    const cue = shadowCueRef.current ?? resolveShadowSegment();
     if (!cue) {
       toast.warning(t('toast.shadowNeedCue'));
       return;
     }
-    compareRef.current = true;
-    gapNextRef.current = 'rec';
-    playOrigSegment(cue.start, cue.end);
-    setPhase('cmp-orig');
-    startShadowWatcher();
+    enterCompareLoop();
     toast.info(t('toast.compareStart'));
   };
 
   // ---------- 手柄/遥控动作注册（映射对话框 + 快捷键共用） ----------
   const REMOTE_ACTIONS: RemoteActionDef[] = [
-    { id: 'playPause', label: t('remote.aPlayPause'), run: () => togglePlay() },
+    {
+      id: 'playPause',
+      label: t('remote.aPlayPause'),
+      run: () => {
+        // 对比循环中按播放键：退出对比并恢复进入前的播放模式
+        if (compareRef.current) {
+          haltShadowPlayback();
+          setPhase('idle');
+          restorePreMode();
+          return;
+        }
+        togglePlay();
+      },
+    },
     { id: 'prevCue', label: t('remote.aPrevCue'), run: () => locateCue(-1) },
     { id: 'nextCue', label: t('remote.aNextCue'), run: () => locateCue(1) },
     {
