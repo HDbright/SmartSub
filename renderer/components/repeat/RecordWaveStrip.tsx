@@ -68,7 +68,7 @@ export default function RecordWaveStrip({
         const buf = await (await fetch(audioUrl)).arrayBuffer();
         const audio = await ctx.decodeAudioData(buf);
         const ch = audio.getChannelData(0);
-        const N = 800;
+        const N = 2000;
         const step = Math.max(1, Math.floor(ch.length / N));
         const peaks: number[] = [];
         for (let i = 0; i < N; i++) {
