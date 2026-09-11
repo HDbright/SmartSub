@@ -2309,6 +2309,20 @@ export default function RepeatWorkbench({
     } | null;
   } | null>(null);
   const [recStream, setRecStream] = useState<MediaStream | null>(null);
+  // 原声段波形峰值：从全曲峰值包络（peaks.max）中切出当前跟读/对比目标段
+  const origSegmentPeaks = useMemo(() => {
+    const cue = shadowCueRef.current;
+    if (!peaks || !peaks.n || !duration || !cue || duration <= 0) return null;
+    const n = peaks.n;
+    const i0 = Math.max(0, Math.floor((cue.start / duration) * n));
+    const i1 = Math.min(n, Math.ceil((cue.end / duration) * n));
+    if (i1 <= i0) return null;
+    const out: number[] = [];
+    for (let i = i0; i < i1; i++) out.push(peaks.max[i]);
+    return out;
+    // shadowPhase 变化时重算（cue 快照在进入阶段时更新）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peaks, duration, shadowPhase]);
 
   const stopShadowWatcher = () => {
     if (shadowTimerRef.current) {
@@ -4087,18 +4101,45 @@ export default function RepeatWorkbench({
                 {/* 跟读录音波形条：录音中=麦克风实时波形；对比播放=跟读录音波形（原声大波形在下方对照） */}
                 {(shadowPhase === 'rec' ||
                   ['cmp-orig', 'cmp-rec', 'gap'].includes(shadowPhase)) && (
-                  <RecordWaveStrip
-                    className="h-20"
-                    mode={shadowPhase === 'rec' ? 'live' : 'file'}
-                    stream={recStream}
-                    audioEl={shadowAudioRef.current}
-                    audioUrl={shadowUrlRef.current}
-                    label={
-                      shadowPhase === 'rec'
-                        ? t('toast.shadowRecording')
-                        : t('remote.aCompare')
-                    }
-                  />
+                  <>
+                    <RecordWaveStrip
+                      className="h-20"
+                      mode={shadowPhase === 'rec' ? 'live' : 'file'}
+                      stream={recStream}
+                      audioEl={shadowAudioRef.current}
+                      audioUrl={shadowUrlRef.current}
+                      label={
+                        shadowPhase === 'rec'
+                          ? t('toast.shadowRecording')
+                          : t('remote.aCompare')
+                      }
+                    />
+                    {/* 原声段波形条：与上方录音波形上下对照 */}
+                    <RecordWaveStrip
+                      className="h-20"
+                      mode="file"
+                      peaks={origSegmentPeaks}
+                      progressFn={
+                        ['orig', 'cmp-orig'].includes(shadowPhase)
+                          ? () => {
+                              const v = videoRef.current;
+                              const cue = shadowCueRef.current;
+                              if (!v || !cue || cue.end <= cue.start)
+                                return null;
+                              return Math.max(
+                                0,
+                                Math.min(
+                                  1,
+                                  (v.currentTime - cue.start) /
+                                    (cue.end - cue.start),
+                                ),
+                              );
+                            }
+                          : null
+                      }
+                      label={t('remote.waveOrig')}
+                    />
+                  </>
                 )}
                 {/* 大波形（缩放视图） */}
                 {zoomOpen && (
