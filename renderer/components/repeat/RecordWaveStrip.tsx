@@ -19,6 +19,8 @@ interface Props {
   peaks?: number[] | null;
   /** 播放头进度（0..1），每帧读取；返回 null 则不画播放头 */
   progressFn?: () => number | null;
+  /** 播放头颜色（默认白色） */
+  playheadColor?: string;
 }
 
 const BARS = 220;
@@ -34,6 +36,7 @@ export default function RecordWaveStrip({
   className,
   peaks: peaksProp,
   progressFn,
+  playheadColor = 'rgba(255, 255, 255, 0.9)',
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const peaksRef = useRef<number[]>([]);
@@ -151,7 +154,15 @@ export default function RecordWaveStrip({
           const bw = W / peaks.length;
           for (let i = 0; i < peaks.length; i++) {
             const bh = Math.max(2, peaks[i] * H * 0.9);
-            g.fillStyle = 'rgba(129, 140, 248, 0.75)';
+            const grad = g.createLinearGradient(
+              0,
+              (H - bh) / 2,
+              0,
+              (H + bh) / 2,
+            );
+            grad.addColorStop(0, 'rgba(199, 210, 254, 0.98)');
+            grad.addColorStop(1, 'rgba(129, 140, 248, 0.55)');
+            g.fillStyle = grad;
             g.fillRect(i * bw + 0.5, (H - bh) / 2, Math.max(1, bw - 1), bh);
           }
         }
@@ -169,7 +180,7 @@ export default function RecordWaveStrip({
           if (pr != null) px = pr * W;
         }
         if (px != null) {
-          g.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          g.fillStyle = playheadColor;
           g.fillRect(Math.max(0, px - 1), 0, 2, H);
         }
       }
@@ -177,7 +188,7 @@ export default function RecordWaveStrip({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [mode, audioEl, decoded, peaksProp, progressFn]);
+  }, [mode, audioEl, decoded, peaksProp, progressFn, playheadColor]);
 
   return (
     <div

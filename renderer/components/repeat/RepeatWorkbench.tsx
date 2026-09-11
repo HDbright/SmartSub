@@ -4108,6 +4108,7 @@ export default function RepeatWorkbench({
                       stream={recStream}
                       audioEl={shadowAudioRef.current}
                       audioUrl={shadowUrlRef.current}
+                      playheadColor="#ef4444"
                       label={
                         shadowPhase === 'rec'
                           ? t('toast.shadowRecording')
@@ -4119,6 +4120,7 @@ export default function RepeatWorkbench({
                       className="h-20"
                       mode="file"
                       peaks={origSegmentPeaks}
+                      playheadColor="#f97316"
                       progressFn={
                         ['orig', 'cmp-orig'].includes(shadowPhase)
                           ? () => {
