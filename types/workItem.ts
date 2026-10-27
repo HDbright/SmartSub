@@ -1,6 +1,7 @@
 import type { IFiles } from './types';
 import type { ProofreadItem } from './proofread';
 import type { DownloadEntry } from './download';
+import type { ToolboxToolId } from './toolbox';
 
 /** 流水线类工作项（转写 / 翻译） */
 export type PipelineWorkItemType =
@@ -21,7 +22,9 @@ export type WorkItemType =
   | PipelineWorkItemType
   | ProofreadWorkItemType
   | DubbingWorkItemType
-  | DownloadWorkItemType;
+  | DownloadWorkItemType
+  | 'compose'
+  | 'toolbox';
 
 export type WorkItemStatus =
   | 'waiting'
@@ -63,7 +66,22 @@ export interface WorkItem {
   downloadEntries?: DownloadEntry[];
 
   configSnapshot?: Record<string, unknown>;
+  /** Editable next-run settings; never replaces an accepted execution snapshot. */
+  taskDraft?: {
+    config: Record<string, unknown>;
+    manuscripts: IFiles[];
+  };
+  taskSubmissions?: Array<{
+    requestId: string;
+    fingerprint: string;
+    acceptedAt: number;
+  }>;
   artifacts?: WorkItemArtifact[];
+  processing?: {
+    toolId?: ToolboxToolId;
+    inputPaths: string[];
+    error?: string;
+  };
 }
 
 export const WORK_ITEM_MIGRATION_VERSION = 1;

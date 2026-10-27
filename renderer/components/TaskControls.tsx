@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleStop, Cloud, Loader2, Pause, Play } from 'lucide-react';
+import { CircleStop, Loader2, Pause, Play } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
 import { cn, isSubtitleFile } from 'lib/utils';
@@ -7,18 +7,13 @@ import { useTranslation } from 'next-i18next';
 import type { TaskTypeDef } from 'lib/taskTypes';
 import { getFileStages, isFileDone } from './tasks/stageUtils';
 import { useHotkeys } from 'hooks/useHotkeys';
-import { isProviderConfigured } from 'lib/providerUtils';
-import { canStartParakeetTask } from 'lib/parakeetTask';
+import { useTaskSubmission } from 'hooks/useTaskSubmission';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from './ui/alert-dialog';
+  buildTaskSnapshotFromConfig,
+  rememberTaskDefaults,
+} from 'hooks/useUnifiedTaskConfig';
+import { getRefineValidationErrorMessage } from 'lib/subtitleRefineValidation';
+import { validateSummaryProvider } from '../../types/summaryProvider';
 
 interface TaskControlsProps {
   files: any[];
@@ -26,11 +21,22 @@ interface TaskControlsProps {
   typeDef: TaskTypeDef;
   projectId: string | null;
   className?: string;
+  /** 可选：当阻断原因是精修配置异常时，唤起精修配置弹层并滚动聚焦 */
+  onOpenRefine?: () => void;
+  /** 可选：当阻断原因是摘要服务不可用时，唤起「生成摘要」弹层并滚动聚焦 */
+  onOpenSummary?: () => void;
   /** 可选：状态变化时上抛（任务页用于联动重试按钮/完成横幅） */
   onStatusChange?: (status: string) => void;
   /** 任务成功派发时回传本轮配置；需要固定快照的任务可立即切换为只读展示。 */
   onTaskDispatched?: (snapshot: any) => void;
+  /**
+   * 任务启动并被确认后，是否把本次配置记为「新任务默认值」（上次用什么，下次默认什么）。
+   * 仅供可编辑草稿开启；固定快照的重启只是重放旧配置，不应改写默认值。
+   */
+  rememberDefaults?: boolean;
   autoStart?: boolean;
+  ready?: boolean;
+  beforeStart?: () => Promise<boolean>;
 }
 
 type TaskCompletePayload = { projectId?: string; status?: string } | string;
@@ -41,18 +47,20 @@ const TaskControls = ({
   typeDef,
   projectId,
   className,
+  onOpenRefine,
+  onOpenSummary,
   onStatusChange,
   onTaskDispatched,
+  rememberDefaults = false,
   autoStart,
+  ready = true,
+  beforeStart,
 }: TaskControlsProps) => {
   const [taskStatus, setTaskStatusState] = useState('idle');
-  const [starting, setStarting] = useState(false);
-  const startingRef = useRef(false);
+  const submission = useTaskSubmission();
+  const { starting } = submission;
   // 首次状态同步是否已完成:autostart 必须等它,否则迟到的 'idle' 会覆盖乐观 'running'
   const [statusSynced, setStatusSynced] = useState(false);
-  // 云端听写「上传确认」：首次开跑云任务时弹确认，勾选不再提醒后写入 settings。
-  const [cloudConsentOpen, setCloudConsentOpen] = useState(false);
-  const pendingCloudFilesRef = useRef<any[] | null>(null);
   const { t } = useTranslation(['home', 'common', 'tasks']);
 
   const setTaskStatus = (status: string) => {
@@ -91,25 +99,21 @@ const TaskControls = ({
   }, [projectId]);
 
   const handleTask = async () => {
-    if (startingRef.current) return;
-    startingRef.current = true;
-    setStarting(true);
+    if (starting || !ready) return;
     try {
+      if (beforeStart && !(await beforeStart())) return;
       if (!files?.length) {
         toast(t('common:notification'), {
           description: t('home:noTask'),
         });
         return;
       }
-      // 向导任务的配置快照（含 dub/compose）里 '-1' 是合法的「不翻译」语义
-      const isSnapshotTask = Boolean(formData?.dub || formData?.compose);
-      // 带翻译的任务必须有有效翻译服务商（'-1' 为历史「不翻译」残留值）
-      if (typeDef.hasTranslate && !isSnapshotTask) {
-        const provider = formData?.translateProvider;
-        if (!provider || provider === '-1') {
-          toast.error(t('home:selectProviderFirst'));
-          return;
-        }
+      if (
+        typeDef.accepts === 'subtitle' &&
+        files.some((file) => !isSubtitleFile(file?.filePath?.toLowerCase()))
+      ) {
+        toast.error(t('tasks:subtitleFilesRequired'));
+        return;
       }
       // 只派发未完成的文件（error 不算完成，可重跑；已完成文件不重做）
       const pendingFiles = files.filter(
@@ -121,133 +125,112 @@ const TaskControls = ({
         });
         return;
       }
-      // 需要模型的任务必须已选模型：自动选择兜底后仍为空，说明确实没有可用模型，
-      // 拦截并指引下载。配对模式文件自带字幕（跳过听写），不需要模型。
-      const needsTranscription = pendingFiles.some(
-        (file) =>
-          !isSubtitleFile(file?.filePath || '') && !file?.providedSubtitlePath,
-      );
-      if (
-        !(await canStartParakeetTask(
-          pendingFiles,
-          typeDef.needsModel,
-          formData,
-        ))
-      ) {
-        toast.error(
-          t('tasks:parakeet.modelUnavailable', {
-            model: formData?.model || 'Parakeet',
-          }),
-        );
-        return;
-      }
-      if (
-        formData?.transcriptionEngine !== 'parakeet' &&
-        typeDef.needsModel &&
-        needsTranscription &&
-        !formData?.model
-      ) {
-        toast.error(t('home:selectModelFirst'));
-        return;
-      }
-      // AI 精修：与向导 D9 一致——跟随不可解析 / 显式服务商失效时阻断开始。
-      if (
-        needsTranscription &&
-        (formData?.aiSegmentation === true || formData?.aiCorrection === true)
-      ) {
-        const providers =
+      if (typeDef.hasTranslate && formData?.generateSummary === true) {
+        const summaryProviders =
           (await window?.ipc?.invoke('getTranslationProviders')) || [];
-        const refineSetting = formData?.refineProvider || 'follow-translation';
-        if (refineSetting === 'follow-translation') {
-          const translateOn =
-            Boolean(formData?.translateProvider) &&
-            formData?.translateProvider !== '-1';
-          const tp = providers.find(
-            (p: any) => p.id === formData?.translateProvider,
+        const summaryBlock = validateSummaryProvider(
+          formData,
+          summaryProviders,
+        );
+        if (summaryBlock) {
+          toast.error(
+            t(
+              summaryBlock === 'follow'
+                ? 'tasks:wizard.blockSummaryFollow'
+                : 'tasks:wizard.blockSummaryProviderInvalid',
+            ),
+            {
+              action: onOpenSummary
+                ? {
+                    label: t('tasks:wizard.summaryActionAdjust'),
+                    onClick: onOpenSummary,
+                  }
+                : undefined,
+            },
           );
-          if (!translateOn || !tp?.isAi) {
-            toast.error(t('tasks:wizard.blockRefineFollow'));
-            return;
-          }
-        } else {
-          const rp = providers.find((p: any) => p.id === refineSetting);
-          if (!rp?.isAi || !isProviderConfigured(rp)) {
-            toast.error(t('tasks:wizard.blockRefineProviderInvalid'));
-            return;
-          }
-        }
-      }
-      // 云端听写：音频会上传到第三方端点，首次开跑前弹确认（隐私/成本护栏）。
-      if (
-        typeDef.needsModel &&
-        needsTranscription &&
-        formData?.transcriptionEngine === 'cloud'
-      ) {
-        const settings = await window?.ipc?.invoke('getSettings');
-        if (!settings?.cloudUploadConsent) {
-          pendingCloudFilesRef.current = pendingFiles;
-          setCloudConsentOpen(true);
+          onOpenSummary?.();
           return;
         }
       }
-      dispatchTask(pendingFiles);
-    } finally {
-      startingRef.current = false;
-      setStarting(false);
+      const snapshot = buildTaskSnapshotFromConfig(formData);
+      const outcome = await submission.submit({
+        projectId,
+        files: pendingFiles,
+        typeDef,
+        formData: { ...snapshot, taskType: typeDef.taskType },
+      });
+      if (outcome.status === 'invalid') {
+        const { readiness } = outcome;
+        if (!readiness.refine.valid) {
+          const msg = getRefineValidationErrorMessage(
+            readiness.refine,
+            (key: string, opts?: any) => String(t(`tasks:${key}` as any, opts)),
+            (key: string, opts?: any) =>
+              String(t(`common:${key}` as any, opts)),
+          );
+          toast.error(msg, {
+            action: onOpenRefine
+              ? {
+                  label: t('tasks:wizard.refineActionAdjust'),
+                  onClick: onOpenRefine,
+                }
+              : undefined,
+          });
+          onOpenRefine?.();
+        } else {
+          toast.error(t(`tasks:readiness.${readiness.errors[0]}` as any));
+        }
+        return;
+      }
+      if (outcome.status !== 'accepted') return;
+      rememberSelection(snapshot);
+      if (rememberDefaults) rememberConfig(outcome.snapshot);
+      onTaskDispatched?.(outcome.snapshot);
+      const status = await window.ipc.invoke('getTaskStatus', projectId);
+      setTaskStatus(status || 'idle');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   };
 
   // 记录"上次使用"的 (引擎,模型[,云实例]) 并派发任务。
-  const dispatchTask = (pendingFiles: any[]) => {
-    if (
-      typeDef.needsModel &&
-      formData?.transcriptionEngine &&
-      formData?.model
-    ) {
-      window?.ipc?.invoke('setSettings', {
-        lastUsedTranscription: {
-          engine: formData.transcriptionEngine,
-          model: formData.model,
-          ...(formData.transcriptionEngine === 'cloud'
-            ? { asrProviderId: formData.asrProviderId }
-            : {}),
-        },
-      });
+  const rememberSelection = (snapshot: Record<string, any>) => {
+    if (typeDef.needsModel && snapshot.transcriptionEngine && snapshot.model) {
+      void window?.ipc
+        ?.invoke('setSettings', {
+          lastUsedTranscription: {
+            engine: snapshot.transcriptionEngine,
+            model: snapshot.model,
+            ...(snapshot.transcriptionEngine === 'cloud'
+              ? { asrProviderId: snapshot.asrProviderId }
+              : {}),
+          },
+        })
+        .catch((error) =>
+          console.error('Failed to remember transcription selection:', error),
+        );
     }
-    setTaskStatus('running');
-    onTaskDispatched?.(formData);
-    window?.ipc?.send('handleTask', {
-      files: pendingFiles,
-      formData,
-      projectId,
-    });
   };
 
-  const handleConfirmCloudConsent = async (remember: boolean) => {
-    setCloudConsentOpen(false);
-    if (remember) {
-      try {
-        await window?.ipc?.invoke('setSettings', { cloudUploadConsent: true });
-      } catch {
-        // 忽略：确认后仍继续本次任务，仅"不再提醒"落库失败
-      }
-    }
-    const files = pendingCloudFilesRef.current;
-    pendingCloudFilesRef.current = null;
-    if (files?.length) dispatchTask(files);
+  // 「上次用什么,下次默认什么」:任务被主进程确认后才记忆。尽力而为——失败只记日志,
+  // 绝不影响已经启动的任务。
+  const rememberConfig = (accepted: Record<string, any>) => {
+    void rememberTaskDefaults(accepted).catch((error) =>
+      console.error('Failed to remember task defaults:', error),
+    );
   };
 
   // ?autostart=1 进入页面时自动开始一次(仅 idle 态,ref 防 StrictMode/重渲染重复触发)
   const autoStartedRef = useRef(false);
   useEffect(() => {
-    if (!statusSynced) return;
+    if (!statusSynced || !ready) return;
     if (!autoStart || autoStartedRef.current) return;
     if (!files?.length) return;
     if (taskStatus !== 'idle') return;
     autoStartedRef.current = true;
     handleTask();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart, files, taskStatus, statusSynced]);
+  }, [autoStart, files, taskStatus, statusSynced, ready]);
 
   const handlePause = () => {
     window?.ipc?.send('pauseTask', projectId);
@@ -296,7 +279,7 @@ const TaskControls = ({
         <Button
           className="gap-1.5"
           onClick={handleTask}
-          disabled={!files.length || starting}
+          disabled={!files.length || starting || !ready}
         >
           <Play className="h-4 w-4" />
           {taskStatus === 'cancelled'
@@ -339,37 +322,7 @@ const TaskControls = ({
         </Button>
       )}
 
-      <AlertDialog open={cloudConsentOpen} onOpenChange={setCloudConsentOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Cloud className="h-5 w-5 text-info" />
-              {t('home:cloudConsent.title')}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('home:cloudConsent.description')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
-            <AlertDialogCancel
-              onClick={() => {
-                pendingCloudFilesRef.current = null;
-              }}
-            >
-              {t('common:cancel')}
-            </AlertDialogCancel>
-            <Button
-              variant="outline"
-              onClick={() => handleConfirmCloudConsent(false)}
-            >
-              {t('home:cloudConsent.confirmOnce')}
-            </Button>
-            <AlertDialogAction onClick={() => handleConfirmCloudConsent(true)}>
-              {t('home:cloudConsent.confirmRemember')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {submission.dialog}
     </div>
   );
 };

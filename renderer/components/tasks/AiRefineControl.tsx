@@ -28,8 +28,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Sparkles } from 'lucide-react';
+import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react';
 import { cn } from 'lib/utils';
+import { validateRefineProviderConfig } from 'lib/subtitleRefineValidation';
 import { isSherpaEngine } from 'lib/subtitleOutcome';
 import type { TaskTypeDef } from 'lib/taskTypes';
 import { useTranslation } from 'next-i18next';
@@ -37,6 +38,7 @@ import { useTranslation } from 'next-i18next';
 interface Provider {
   id: string;
   name: string;
+  type?: string;
   isAi?: boolean;
   [key: string]: any;
 }
@@ -46,6 +48,9 @@ interface AiRefineControlProps {
   formData: any;
   providers: Provider[];
   typeDef: TaskTypeDef;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  className?: string;
 }
 
 type SegmentationMode = 'smart' | 'unlimited' | 'custom' | 'ai';
@@ -55,11 +60,22 @@ const AiRefineControl: React.FC<AiRefineControlProps> = ({
   formData,
   providers,
   typeDef,
+  open: controlledOpen,
+  onOpenChange: onControlledOpenChange,
+  className,
 }) => {
   const { t } = useTranslation('tasks');
   const { t: tHome } = useTranslation('home');
   const { t: tCommon } = useTranslation('common');
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = typeof controlledOpen === 'boolean';
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (nextOpen: boolean) => {
+    if (!isControlled) {
+      setInternalOpen(nextOpen);
+    }
+    onControlledOpenChange?.(nextOpen);
+  };
 
   const setValue = (name: string, value: unknown) =>
     form.setValue(name, value, { shouldDirty: true });
@@ -101,21 +117,33 @@ const AiRefineControl: React.FC<AiRefineControlProps> = ({
     }
   };
 
-  // 服务商解析预览（与主进程 resolveRefineProvider 同一语义，仅展示与就地提示）
+  // 服务商解析与校验（统一调用 subtitleRefineValidation）
   const refineSetting = formData?.refineProvider || 'follow-translation';
   const aiProviders = providers.filter((p) => p?.isAi);
   const translateProviderObj = providers.find(
     (p) => p?.id === formData?.translateProvider,
   );
-  const followResolvable = Boolean(
-    typeDef.hasTranslate &&
-      formData?.translateProvider !== '-1' &&
-      translateProviderObj?.isAi,
+  const translateOn = Boolean(
+    typeDef.hasTranslate && formData?.translateProvider !== '-1',
   );
+  const validation = validateRefineProviderConfig({
+    formData,
+    providers,
+    translateOn,
+  });
+  const followValidation = validateRefineProviderConfig({
+    formData: { ...formData, refineProvider: 'follow-translation' },
+    providers,
+    translateOn,
+  });
+  const followResolvable = followValidation.valid;
+
   const providerName = (p?: Provider) =>
     p ? tCommon(`provider.${p.name}`, { defaultValue: p.name }) : '';
 
   const needsProvider = segAiOn || corrOn;
+  const hasRefineError = needsProvider && !validation.valid;
+
   const sherpaApprox =
     isSherpaEngine(formData?.transcriptionEngine) ||
     formData?.transcriptionEngine === 'localCli';
@@ -132,12 +160,15 @@ const AiRefineControl: React.FC<AiRefineControlProps> = ({
   const stateLabel = corrOn
     ? `${modeLabel}${t('refine.control.state.corrSuffix')}`
     : modeLabel;
+  const displayLabel = hasRefineError
+    ? `${stateLabel}${t('refine.control.state.warningSuffix')}`
+    : stateLabel;
 
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-xs text-muted-foreground whitespace-nowrap">
-        {t('refine.control.label')}
-      </span>
+    <div
+      id="ai-refine-control-container"
+      className={cn('w-full min-w-0 scroll-mt-20', className)}
+    >
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
@@ -145,13 +176,22 @@ const AiRefineControl: React.FC<AiRefineControlProps> = ({
             variant="outline"
             size="sm"
             className={cn(
-              'h-8 gap-1.5 text-xs',
-              (segAiOn || corrOn) &&
-                'border-primary/50 bg-primary/[0.06] text-primary hover:text-primary',
+              'h-8 w-full min-w-0 text-xs gap-1 px-2.5 font-normal justify-between',
+              hasRefineError
+                ? 'border-warning/60 bg-warning/10 text-warning hover:bg-warning/20 hover:text-warning'
+                : (segAiOn || corrOn) &&
+                    'border-primary/50 bg-primary/[0.06] text-primary hover:text-primary',
             )}
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            {stateLabel}
+            <div className="flex items-center gap-1.5 min-w-0 truncate">
+              {hasRefineError ? (
+                <TriangleAlert className="h-3.5 w-3.5 flex-none text-warning" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5 flex-none" />
+              )}
+              <span className="truncate">{displayLabel}</span>
+            </div>
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-50 ml-1" />
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -287,6 +327,11 @@ const AiRefineControl: React.FC<AiRefineControlProps> = ({
               {refineSetting === 'follow-translation' && !followResolvable && (
                 <p className="text-xs text-destructive">
                   {t('refine.provider.followBlocked')}
+                </p>
+              )}
+              {refineSetting !== 'follow-translation' && !validation.valid && (
+                <p className="text-xs text-destructive">
+                  {t('wizard.blockRefineProviderInvalid')}
                 </p>
               )}
             </div>

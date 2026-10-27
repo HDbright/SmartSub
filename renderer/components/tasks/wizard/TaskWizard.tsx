@@ -2,7 +2,7 @@
  * 新建任务向导（目标驱动，一屏）：
  * 拖入文件自动识别 → 勾选目标产物（字幕/翻译/配音/成品视频）→ 阶段链芯片可视化
  * → 分区就地配置（字幕段复用 InlineConfigBar；配音/合成为轻量行）→ 就绪校验 → 开始。
- * 配置为本地表单（useLocalFormConfig），随任务写入配置快照，不污染全局 userConfig。
+ * 配置为本地表单（useUnifiedTaskConfig），随任务写入配置快照，不污染全局 userConfig。
  */
 import React, {
   useCallback,
@@ -27,10 +27,13 @@ import {
   Info,
   Languages,
   Mic2,
+  Bookmark,
   Play,
+  RotateCcw,
   Trash2,
   TriangleAlert,
   Upload,
+  UsersRound,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -59,6 +62,7 @@ import {
 import { cn, isSubtitleFile } from 'lib/utils';
 import { getTaskTypeByValue } from 'lib/taskTypes';
 import { isProviderConfigured } from 'lib/providerUtils';
+import { validateSummaryProvider } from '../../../../types/summaryProvider';
 import { resolveDefaultTranslateProviderId } from 'lib/providerPanelUtils';
 import {
   getEngineModelGroups,
@@ -66,18 +70,40 @@ import {
   pickDefaultEngineModel,
   hasUnavailableParakeetModel,
 } from 'lib/engineModels';
-import { canStartParakeetTask } from 'lib/parakeetTask';
+import { validateTaskConfigReady } from 'lib/taskReadiness';
+import {
+  validateRefineProviderConfig,
+  getRefineValidationErrorMessage,
+} from 'lib/subtitleRefineValidation';
 import InlineConfigBar from '@/components/tasks/InlineConfigBar';
-import useSystemInfo from 'hooks/useStystemInfo';
-import useLocalFormConfig from 'hooks/useLocalFormConfig';
-import useLocalStorageState from 'hooks/useLocalStorageState';
+import CpuAdvisoryNotice from '@/components/diagnostics/CpuAdvisoryNotice';
+import AdvancedSheet from '@/components/tasks/AdvancedSheet';
+import TaskLoadStatus from '@/components/tasks/TaskLoadStatus';
+import useTaskDependencies from 'hooks/useTaskDependencies';
+import useUnifiedTaskConfig from 'hooks/useUnifiedTaskConfig';
+import { useTaskSubmission } from 'hooks/useTaskSubmission';
+import { taskDraftManager, type TaskDraft } from '@/lib/taskDraftManager';
+import { taskSubmissionKey } from '../../../../types/taskSubmission';
+import { useNavigationGuard } from '@/context/NavigationGuardContext';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+} from '@/components/ui/alert-dialog';
 import { useTtsEngineOptions, parseEngineKey } from 'hooks/useTtsEngineOptions';
 import {
   BUILTIN_RECIPES,
   recipeToWizardPrefill,
   WIZARD_DROP_KEY,
 } from 'lib/recipes';
-import { pairMediaWithSubtitlesManual } from 'lib/filePairing';
+import {
+  isManuscriptPath,
+  pairMediaWithManuscriptsManual,
+  pairMediaWithSubtitlesManual,
+} from 'lib/filePairing';
 import {
   STYLE_PRESETS,
   getDefaultStyle,
@@ -85,7 +111,6 @@ import {
 } from '@/components/subtitleMerge/constants';
 import { useTranslation } from 'next-i18next';
 import type { TranscriptionEngine } from '../../../../types/engine';
-import type { AsrProvider } from '../../../../types/asrProvider';
 import type {
   IFiles,
   IFormData,
@@ -98,7 +123,7 @@ import type {
   UserStylePreset,
   VideoQuality,
 } from '../../../../types/subtitleMerge';
-import { stripSpeakerDiarizationConfig } from '../../../../types/speakerDiarization';
+import { enforceSpeakerDiarizationTaskBoundary } from '../../../../types/speakerDiarization';
 import DubbingLanguageSelect from '../../dubbing/DubbingLanguageSelect';
 import {
   localTtsLanguageError,
@@ -156,12 +181,22 @@ export default function TaskWizard() {
   // 媒体+字幕混合（配对模式：同名字幕即源字幕，跳过听写）
   const [files, setFiles] = useState<IFiles[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const manuscriptFiles = useMemo(
+    () => files.filter((f) => isManuscriptPath(f.filePath)),
+    [files],
+  );
   const mediaFiles = useMemo(
-    () => files.filter((f) => !isSubtitleFile(f.filePath)),
+    () =>
+      files.filter(
+        (f) => !isSubtitleFile(f.filePath) && !isManuscriptPath(f.filePath),
+      ),
     [files],
   );
   const subtitleFiles = useMemo(
-    () => files.filter((f) => isSubtitleFile(f.filePath)),
+    () =>
+      files.filter(
+        (f) => isSubtitleFile(f.filePath) && !isManuscriptPath(f.filePath),
+      ),
     [files],
   );
   const inputKind: 'media' | 'subtitle' | 'paired' | null =
@@ -203,6 +238,73 @@ export default function TaskWizard() {
     [subtitleFiles],
   );
 
+  // 手动指派的文稿配对（媒体路径 → 文稿路径 或 '__none__'）
+  const [manualManuscriptPairs, setManualManuscriptPairs] = useState<
+    Map<string, string>
+  >(() => new Map());
+
+  const manuscriptPairing = useMemo(
+    () =>
+      mediaFiles.length > 0 &&
+      (manuscriptFiles.length > 0 || manualManuscriptPairs.size > 0)
+        ? pairMediaWithManuscriptsManual(
+            mediaFiles,
+            manuscriptFiles,
+            manualManuscriptPairs,
+          )
+        : null,
+    [mediaFiles, manuscriptFiles, manualManuscriptPairs],
+  );
+
+  const pairedManuscriptByMediaPath = useMemo(() => {
+    const map = new Map<
+      string,
+      IFiles | { filePath: string; fileName: string }
+    >();
+    manuscriptPairing?.pairs.forEach((p) =>
+      map.set(p.media.filePath, p.manuscript),
+    );
+    return map;
+  }, [manuscriptPairing]);
+
+  const assignManuscript = useCallback(
+    (mediaPath: string, manuscriptPath: string) => {
+      setManualManuscriptPairs((prev) => {
+        const next = new Map(prev);
+        if (!manuscriptPath) {
+          next.delete(mediaPath);
+        } else {
+          next.set(mediaPath, manuscriptPath);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleBrowseManuscript = useCallback(
+    async (mediaPath: string) => {
+      const result = await window?.ipc?.invoke('selectFiles', {
+        type: 'manuscript',
+        multiple: false,
+      });
+      if (!result || result.canceled || !result.filePaths?.length) return;
+      const picked = result.filePaths[0] as string;
+      const wrapped = ((await window?.ipc?.invoke('getDroppedFiles', {
+        files: [picked],
+        taskType: 'manuscript',
+      })) ?? [])[0] as IFiles | undefined;
+      if (!wrapped) return;
+      setFiles((prev) =>
+        prev.some((f) => f.filePath === wrapped.filePath)
+          ? prev
+          : [...prev, wrapped],
+      );
+      assignManuscript(mediaPath, wrapped.filePath);
+    },
+    [assignManuscript],
+  );
+
   /** 删除视频行：合并行语义，连同其配对字幕一起移除（含手动指派记录） */
   const removeMediaRow = useCallback(
     (mediaPath: string) => {
@@ -213,6 +315,12 @@ export default function TaskWizard() {
         ),
       );
       setManualPairs((prev) => {
+        if (!prev.has(mediaPath)) return prev;
+        const next = new Map(prev);
+        next.delete(mediaPath);
+        return next;
+      });
+      setManualManuscriptPairs((prev) => {
         if (!prev.has(mediaPath)) return prev;
         const next = new Map(prev);
         next.delete(mediaPath);
@@ -271,6 +379,54 @@ export default function TaskWizard() {
   const appendFiles = useCallback(
     (incoming: IFiles[]) => {
       if (!incoming?.length) return;
+      const incomingScripts = incoming.filter((f) =>
+        isManuscriptPath(f.filePath),
+      );
+      if (incomingScripts.length > 0) {
+        setFiles((currentFiles) => {
+          const currentMedia = currentFiles.filter(
+            (f) => !isSubtitleFile(f.filePath) && !isManuscriptPath(f.filePath),
+          );
+          const nextMedia = [
+            ...currentMedia,
+            ...incoming.filter(
+              (f) =>
+                !isSubtitleFile(f.filePath) &&
+                !isManuscriptPath(f.filePath) &&
+                !currentMedia.some((m) => m.filePath === f.filePath),
+            ),
+          ];
+          if (nextMedia.length === 1 && incomingScripts.length === 1) {
+            toast.success(
+              t('manuscript.singleMatchedToast', {
+                scriptName: incomingScripts[0].fileName,
+                videoName: nextMedia[0].fileName,
+              }),
+            );
+          } else if (nextMedia.length > 0) {
+            const auto = pairMediaWithManuscriptsManual(
+              nextMedia,
+              incomingScripts,
+            );
+            if (auto.pairs.length > 0) {
+              toast.success(
+                t('manuscript.autoMatchedToast', {
+                  count: auto.pairs.length,
+                }),
+              );
+            }
+            if (auto.unpairedManuscripts.length > 0) {
+              toast.info(
+                t('manuscript.unmatchedToast', {
+                  name: auto.unpairedManuscripts[0].fileName,
+                }),
+              );
+            }
+          }
+          return currentFiles;
+        });
+      }
+
       setFiles((prev) => {
         const seen = new Set(prev.map((f) => f.filePath));
         const fresh: IFiles[] = [];
@@ -317,28 +473,46 @@ export default function TaskWizard() {
         if (p) paths.push(p);
       }
       if (!paths.length) return;
-      // 双类型解析：媒体与字幕各过一遍过滤（含目录展开），混合拖入进配对模式
-      const [droppedMedia, droppedSubtitles] = await Promise.all([
-        window?.ipc?.invoke('getDroppedFiles', {
-          files: paths,
-          taskType: 'media',
-        }),
-        window?.ipc?.invoke('getDroppedFiles', {
-          files: paths,
-          taskType: 'translate',
-        }),
-      ]);
-      const dropped = [...(droppedMedia ?? []), ...(droppedSubtitles ?? [])];
+      // 三类型解析：媒体、字幕与参考文稿各过一遍过滤（含目录展开）
+      const [droppedMedia, droppedSubtitles, droppedManuscripts] =
+        await Promise.all([
+          window?.ipc?.invoke('getDroppedFiles', {
+            files: paths,
+            taskType: 'media',
+          }),
+          window?.ipc?.invoke('getDroppedFiles', {
+            files: paths,
+            taskType: 'translate',
+          }),
+          window?.ipc?.invoke('getDroppedFiles', {
+            files: paths,
+            taskType: 'manuscript',
+          }),
+        ]);
+      const dropped = [
+        ...(droppedMedia ?? []),
+        ...(droppedSubtitles ?? []),
+        ...(droppedManuscripts ?? []),
+      ];
       if (dropped.length) appendFiles(dropped);
     },
     [appendFiles],
   );
 
+  // 跟踪是否有外部来源（sessionStorage 交接、URL ?video= 或 ?preset=）以防草稿覆盖外部输入
+  const hasExternalSourceRef = useRef(false);
+
   // 启动台/下载页交接：sessionStorage 一次性消费
   useEffect(() => {
+    if (!router.isReady) return;
     try {
+      if (router.query.draft) {
+        sessionStorage.removeItem(WIZARD_DROP_KEY);
+        return;
+      }
       const raw = sessionStorage.getItem(WIZARD_DROP_KEY);
       if (raw) {
+        hasExternalSourceRef.current = true;
         sessionStorage.removeItem(WIZARD_DROP_KEY);
         const dropped = JSON.parse(raw) as IFiles[];
         if (Array.isArray(dropped) && dropped.length) appendFiles(dropped);
@@ -347,7 +521,72 @@ export default function TaskWizard() {
       /* ignore */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [router.isReady, router.query.draft]);
+
+  // 支持 URL 参数直接预填媒体（如工具箱无损视频裁剪/提取后一键「新建任务」：?video=...）或字幕（?subtitle=...）
+  useEffect(() => {
+    if (!router.isReady) return;
+    const targetVideo =
+      typeof router.query.video === 'string' ? router.query.video : null;
+    const targetSubtitle =
+      typeof router.query.subtitle === 'string' ? router.query.subtitle : null;
+
+    if (targetVideo) {
+      hasExternalSourceRef.current = true;
+      (async () => {
+        try {
+          const droppedMedia = await window?.ipc?.invoke('getDroppedFiles', {
+            files: [targetVideo],
+            taskType: 'media',
+          });
+          if (droppedMedia && droppedMedia.length) {
+            appendFiles(droppedMedia);
+          }
+        } catch (err) {
+          console.error('Failed to import video from query:', err);
+        }
+      })();
+    }
+
+    if (targetSubtitle) {
+      hasExternalSourceRef.current = true;
+      (async () => {
+        try {
+          const droppedSubtitles = await window?.ipc?.invoke(
+            'getDroppedFiles',
+            {
+              files: [targetSubtitle],
+              taskType: 'translate',
+            },
+          );
+          if (droppedSubtitles && droppedSubtitles.length) {
+            appendFiles(droppedSubtitles);
+          }
+        } catch (err) {
+          console.error('Failed to import subtitle from query:', err);
+        }
+      })();
+    }
+  }, [router.isReady, router.query.video, router.query.subtitle, appendFiles]);
+
+  // 支持 URL 参数预设目标产物（如工具箱一键去配音：?goals=dub 或 ?goals=video）
+  useEffect(() => {
+    if (!router.isReady) return;
+    const rawGoals = router.query.goals;
+    if (rawGoals) {
+      const goalList = (
+        Array.isArray(rawGoals) ? rawGoals.join(',') : String(rawGoals)
+      )
+        .split(',')
+        .map((g) => g.trim().toLowerCase());
+
+      setGoals({
+        translate: goalList.includes('translate'),
+        dub: goalList.includes('dub'),
+        video: goalList.includes('video'),
+      });
+    }
+  }, [router.isReady, router.query.goals]);
 
   // 下载页交接来源（?fromDownload=<downloadWorkItemId>）：写入任务快照供回溯
   const sourceDownloadWorkItemId =
@@ -378,34 +617,111 @@ export default function TaskWizard() {
     setGoals((prev) => (prev.video ? { ...prev, video: false } : prev));
   }, [videoAllowed]);
 
-  // ── 字幕段配置（本地表单 + InlineConfigBar 复用）─────────────────────────
-  const { form, formData, loaded: formLoaded } = useLocalFormConfig();
-  const { systemInfo, loaded: systemInfoLoaded } = useSystemInfo();
-  const [providers, setProviders] = useState<any[]>([]);
-  const [asrProviders, setAsrProviders] = useState<AsrProvider[]>([]);
-  const [providersLoaded, setProvidersLoaded] = useState(false);
-  const [useLocalWhisper, setUseLocalWhisper] = useState(false);
-  const [lastUsedTranscription, setLastUsedTranscription] = useState<{
-    engine?: TranscriptionEngine;
-    model?: string;
-    asrProviderId?: string;
-  } | null>(null);
+  // 表单与统一配置状态机
+  const {
+    form,
+    formData,
+    loaded: formLoaded,
+    loading: formLoading,
+    loadError: formLoadError,
+    load: reloadForm,
+    hydrateSnapshot,
+  } = useUnifiedTaskConfig();
 
+  // 草稿恢复与自动保存
+  const [restoredDraftCount, setRestoredDraftCount] = useState<number | null>(
+    null,
+  );
+  const draftInitializedRef = useRef(false);
+  const draftConsumedRef = useRef(false);
+  const draftProjectIdRef = useRef(uuidv4());
+  const [recoveryDraft, setRecoveryDraft] = useState<TaskDraft | null>(null);
+  const [draftReadFailed, setDraftReadFailed] = useState(false);
+  const [draftStorageFailed, setDraftStorageFailed] = useState(
+    taskDraftManager.storageFailed,
+  );
+
+  // 1. 初始化时尝试恢复草稿（仅当没有外部来源交接且全局配置加载就绪时）
   useEffect(() => {
-    (async () => {
-      try {
-        setProviders(
-          (await window?.ipc?.invoke('getTranslationProviders')) || [],
-        );
-        setAsrProviders((await window?.ipc?.invoke('getAsrProviders')) || []);
-        const settings = await window?.ipc?.invoke('getSettings');
-        setUseLocalWhisper(settings?.useLocalWhisper || false);
-        setLastUsedTranscription(settings?.lastUsedTranscription || null);
-      } finally {
-        setProvidersLoaded(true);
+    if (
+      draftInitializedRef.current ||
+      recoveryDraft ||
+      !router.isReady ||
+      !formLoaded
+    )
+      return;
+
+    let hasSessionDrop = hasExternalSourceRef.current;
+    try {
+      if (!router.query.draft)
+        hasSessionDrop ||= Boolean(sessionStorage.getItem(WIZARD_DROP_KEY));
+    } catch {
+      // The durable draft remains available if session storage is restricted.
+    }
+    const hasQueryVideo = Boolean(router.query.video);
+    const hasQuerySubtitle = Boolean(router.query.subtitle);
+    const hasPreset = Boolean(router.query.preset || router.query.recipe);
+
+    const hasExternalFiles =
+      hasSessionDrop || hasQueryVideo || hasQuerySubtitle;
+
+    if (hasExternalFiles || hasPreset || files.length > 0) {
+      draftInitializedRef.current = true;
+      return;
+    }
+
+    try {
+      const draft = taskDraftManager.getDraft();
+      if (draft && Array.isArray(draft.files) && draft.files.length > 0) {
+        setRecoveryDraft(draft);
+        return;
       }
-    })();
-  }, []);
+      if (taskDraftManager.hasUnreadableDraft) {
+        setDraftReadFailed(true);
+        return;
+      }
+    } catch (e) {
+      console.error('Failed to restore task wizard draft:', e);
+    }
+    draftInitializedRef.current = true;
+  }, [
+    router.isReady,
+    formLoaded,
+    router.query,
+    files.length,
+    form,
+    hydrateSnapshot,
+    recoveryDraft,
+  ]);
+
+  const clearDraft = useCallback(() => {
+    draftProjectIdRef.current = uuidv4();
+    taskDraftManager.clearDraft();
+    setFiles([]);
+    setGoals({
+      translate: false,
+      dub: false,
+      video: false,
+    });
+    setManualPairs(new Map());
+    setManualManuscriptPairs(new Map());
+    setRestoredDraftCount(null);
+    form.reset({});
+    setSubtitleGateOn(true);
+    setDubbingGateOn(false);
+    setComposeSubtitle('hard');
+    setComposeStyleId('classic');
+    setAppliedRecipeName(null);
+  }, [form]);
+  const [refinePopoverOpen, setRefinePopoverOpen] = useState(false);
+  const [summaryPopoverOpen, setSummaryPopoverOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const dependencies = useTaskDependencies();
+  const { systemInfo, providers, asrProviders, settings } = dependencies;
+  const systemInfoLoaded = dependencies.loaded;
+  const providersLoaded = dependencies.loaded;
+  const useLocalWhisper = settings.useLocalWhisper || false;
+  const lastUsedTranscription = settings.lastUsedTranscription || null;
 
   const taskType =
     inputKind === 'subtitle'
@@ -414,10 +730,8 @@ export default function TaskWizard() {
         ? 'generateAndTranslate'
         : 'generateOnly';
   const typeDef = getTaskTypeByValue(taskType)!;
-  // 字幕段配置条：媒体输入（有转写配置）或勾了翻译时才有可配项；
-  // 配对模式跳过听写（无模型项），源语言标签按字幕语义展示
-  const showSubtitleConfig =
-    inputKind === 'media' || inputKind === null || translateOn;
+  // Paired inputs skip ASR but still expose output and speaker settings.
+  const showSubtitleConfig = inputKind !== 'subtitle' || translateOn;
   const configTypeDef =
     inputKind === 'paired'
       ? { ...typeDef, needsModel: false, accepts: 'subtitle' as const }
@@ -479,16 +793,15 @@ export default function TaskWizard() {
     );
   }, [translateOn, providers, formLoaded, formData?.translateProvider, form]);
 
-  // ── 配音配置（工作台同款记忆）─────────────────────────────────────────────
+  // Task-specific settings are recovered from this wizard's draft only.
   const { engineOptions } = useTtsEngineOptions();
-  const [dubPersisted, setDubPersisted] =
-    useLocalStorageState<PersistedDubbing>('dubbingConfig', {
-      engineKey: '',
-      voice: '',
-      globalSpeed: 1,
-      cloneQuality: 'standard',
-      localConcurrency: 1,
-    } as PersistedDubbing);
+  const [dubPersisted, setDubPersisted] = useState<PersistedDubbing>({
+    engineKey: '',
+    voice: '',
+    globalSpeed: 1,
+    cloneQuality: 'standard',
+    localConcurrency: 1,
+  } as PersistedDubbing);
   const activeEngine = useMemo(() => {
     const ready = engineOptions.filter((o) => o.ready);
     return (
@@ -610,7 +923,7 @@ export default function TaskWizard() {
     }
     const system =
       STYLE_PRESETS.find((p) => p.id === effectiveComposeStyleId) ??
-      STYLE_PRESETS[0];
+      STYLE_PRESETS.find((preset) => preset.id === 'classic')!;
     return {
       style:
         system.id === 'classic'
@@ -728,6 +1041,148 @@ export default function TaskWizard() {
     setPendingRecipeConfig(null);
   }, [pendingRecipeConfig, formLoaded, form, setDubPersisted]);
 
+  const restoreWizardDraft = () => {
+    const draft = recoveryDraft;
+    if (!draft) return;
+    draftInitializedRef.current = true;
+    setFiles(draft.files);
+    draftProjectIdRef.current = draft.id || uuidv4();
+    if (draft.goals && !router.query.goals)
+      setGoals({ translate: false, dub: false, video: false, ...draft.goals });
+    if (draft.config) hydrateSnapshot(draft.config);
+    if (Array.isArray(draft.manualPairs))
+      setManualPairs(new Map(draft.manualPairs));
+    if (Array.isArray(draft.manualManuscriptPairs))
+      setManualManuscriptPairs(new Map(draft.manualManuscriptPairs));
+    if (draft.pipeline) {
+      const pipeline = draft.pipeline;
+      setDubPersisted(pipeline.dubbing as PersistedDubbing);
+      setComposeSubtitle(pipeline.subtitle);
+      setComposeStyleId(pipeline.styleId);
+      setComposeQuality(pipeline.quality as VideoQuality);
+      setComposeEncoder(pipeline.encoder as EncoderMode);
+      composeMetaTouchedRef.current = true;
+      setSubtitleGateOn(pipeline.subtitleGate);
+      setDubbingGateOn(pipeline.dubbingGate);
+      setAppliedRecipeName(pipeline.recipeName);
+      // Pair detection must not replace the saved gate on the following render.
+      const hasMedia = draft.files.some(
+        (file) =>
+          !isSubtitleFile(file.filePath) && !isManuscriptPath(file.filePath),
+      );
+      const hasSubtitle = draft.files.some(
+        (file) =>
+          isSubtitleFile(file.filePath) && !isManuscriptPath(file.filePath),
+      );
+      prevKindRef.current =
+        hasMedia && hasSubtitle
+          ? 'paired'
+          : hasMedia
+            ? 'media'
+            : hasSubtitle
+              ? 'subtitle'
+              : null;
+    }
+    setRestoredDraftCount(draft.files.length);
+    setRecoveryDraft(null);
+  };
+
+  // An explicit launchpad handoff resumes the exact persisted snapshot. Ordinary
+  // visits still require confirmation before recovering an interrupted draft.
+  useEffect(() => {
+    if (recoveryDraft?.id && router.query.draft === recoveryDraft.id) {
+      restoreWizardDraft();
+    }
+  }, [recoveryDraft, router.query.draft]);
+
+  const discardWizardDraft = () => {
+    draftInitializedRef.current = true;
+    taskDraftManager.clearDraft();
+    setRecoveryDraft(null);
+    clearDraft();
+  };
+
+  const retryReadDraft = () => {
+    const draft = taskDraftManager.getDraft();
+    if (taskDraftManager.hasUnreadableDraft) return;
+    setDraftReadFailed(false);
+    setDraftStorageFailed(false);
+    if (draft?.files.length) setRecoveryDraft(draft);
+    else draftInitializedRef.current = true;
+  };
+
+  const persistWizardDraft = useCallback(() => {
+    if (!formLoaded) return false;
+    const previous = taskDraftManager.getDraft();
+    const saved = taskDraftManager.saveDraft({
+      id: draftProjectIdRef.current,
+      submission:
+        previous?.id === draftProjectIdRef.current
+          ? previous.submission
+          : undefined,
+      files,
+      goals,
+      manualPairs: Array.from(manualPairs.entries()),
+      manualManuscriptPairs: Array.from(manualManuscriptPairs.entries()),
+      config: formData,
+      pipeline: {
+        dubbing: dubPersisted,
+        subtitle: composeSubtitle,
+        styleId: composeStyleId,
+        quality: composeQuality,
+        encoder: composeEncoder,
+        subtitleGate: subtitleGateOn,
+        dubbingGate: dubbingGateOn,
+        recipeName: appliedRecipeName,
+      },
+      savedAt: Date.now(),
+    });
+    setDraftStorageFailed(!saved);
+    return saved;
+  }, [
+    files,
+    goals,
+    manualPairs,
+    manualManuscriptPairs,
+    formData,
+    formLoaded,
+    recoveryDraft,
+    dubPersisted,
+    composeSubtitle,
+    composeStyleId,
+    composeQuality,
+    composeEncoder,
+    subtitleGateOn,
+    dubbingGateOn,
+    appliedRecipeName,
+  ]);
+
+  // Persist the entire task intent after each committed change, including before refresh.
+  useEffect(() => {
+    if (
+      !draftInitializedRef.current ||
+      !formLoaded ||
+      recoveryDraft ||
+      draftReadFailed ||
+      draftConsumedRef.current
+    )
+      return;
+    persistWizardDraft();
+  }, [persistWizardDraft, formLoaded, recoveryDraft, draftReadFailed]);
+
+  useNavigationGuard('task-wizard-storage', {
+    getIsDirty: () =>
+      files.length > 0 &&
+      taskDraftManager.storageFailed &&
+      !draftConsumedRef.current,
+    isDirty:
+      files.length > 0 && draftStorageFailed && !draftConsumedRef.current,
+    onSave: async () => persistWizardDraft(),
+    onDiscard: () => {
+      taskDraftManager.clearDraft();
+    },
+  });
+
   // ── 阶段链与就绪校验 ──────────────────────────────────────────────────────
   const chips = useMemo(() => {
     const list: Array<{ key: string; label: string; icon: React.ElementType }> =
@@ -738,7 +1193,10 @@ export default function TaskWizard() {
         label: t('stage.transcribe'),
         icon: Mic2,
       });
-      if (formData?.manuscriptPath) {
+      const hasAnyManuscript =
+        Boolean(formData?.manuscriptPath) ||
+        pairedManuscriptByMediaPath.size > 0;
+      if (hasAnyManuscript) {
         list.push({
           key: 'manuscript',
           label: t('stage.manuscript'),
@@ -753,6 +1211,13 @@ export default function TaskWizard() {
         icon: Languages,
       });
     }
+    if (inputKind !== 'subtitle' && formData?.speakerDiarization === true) {
+      list.push({
+        key: 'speakerDiarization',
+        label: t('stage.speakerDiarization'),
+        icon: UsersRound,
+      });
+    }
     if (dubOn) {
       list.push({ key: 'dub', label: t('stage.dubbing'), icon: AudioLines });
     }
@@ -760,18 +1225,46 @@ export default function TaskWizard() {
       list.push({ key: 'compose', label: t('stage.compose'), icon: Film });
     }
     return list;
-  }, [inputKind, formData?.manuscriptPath, translateOn, dubOn, videoOn, t]);
+  }, [
+    inputKind,
+    formData?.manuscriptPath,
+    formData?.speakerDiarization,
+    pairedManuscriptByMediaPath,
+    translateOn,
+    dubOn,
+    videoOn,
+    t,
+  ]);
+
+  interface BlockerAction {
+    label: string;
+    onClick: () => void;
+    variant?: 'outline' | 'default' | 'secondary' | 'ghost' | 'link';
+  }
+
+  interface BlockerItem {
+    key: string;
+    text: string;
+    href?: string;
+    actions?: BlockerAction[];
+  }
 
   const blockers = useMemo(() => {
-    const list: Array<{ key: string; text: string; href?: string }> = [];
+    const list: BlockerItem[] = [];
     if (!files.length) {
       list.push({ key: 'files', text: t('wizard.blockNoFiles') });
       return list;
     }
     if (inputKind === 'media') {
-      const groups = getEngineModelGroups(systemInfo, {
-        includeLocalCli: useLocalWhisper,
+      const readiness = validateTaskConfigReady({
+        files,
+        typeDef: configTypeDef,
+        formData,
+        systemInfo,
         asrProviders,
+        providers,
+        includeLocalCli: useLocalWhisper,
+        translateOn,
       });
       if (hasUnavailableParakeetModel(systemInfo, formData)) {
         list.push({
@@ -781,13 +1274,25 @@ export default function TaskWizard() {
           }),
           href: `/${locale}/engines`,
         });
-      } else if (!groups.length) {
+      } else if (readiness.errors.some((error) => error.startsWith('model_'))) {
         list.push({
           key: 'model',
           text: t('wizard.blockNoModel'),
           href: `/${locale}/engines`,
         });
       }
+    }
+    if (
+      inputKind !== 'subtitle' &&
+      formData?.speakerDiarization === true &&
+      (!systemInfo?.speakerDiarizationModelInstalled ||
+        !systemInfo?.speakerDiarizationRuntimeInstalled)
+    ) {
+      list.push({
+        key: 'speaker',
+        text: t('readiness.speaker_diarization_unavailable'),
+        href: `/${locale}/engines`,
+      });
     }
     // 配对模式：每个视频必须有同名字幕（缺配对的先移除或补字幕）
     if (pairing && pairing.unpairedMedia.length > 0) {
@@ -799,14 +1304,54 @@ export default function TaskWizard() {
       });
     }
     if (translateOn) {
+      if (!formData?.targetLanguage || formData.targetLanguage === 'auto')
+        list.push({
+          key: 'target-language',
+          text: t('readiness.target_language_required'),
+        });
       const provider = providers.find(
         (p: any) => p.id === formData?.translateProvider,
       );
       if (!provider || !isProviderConfigured(provider)) {
+        const alternative = providers.find(
+          (candidate: any) =>
+            candidate.id ===
+            resolveDefaultTranslateProviderId(providers as any[]),
+        );
         list.push({
           key: 'provider',
           text: t('wizard.blockNoProvider'),
           href: `/${locale}/translation`,
+          actions: alternative
+            ? [
+                {
+                  label: t('home:useTranslationService', {
+                    name: alternative.name,
+                  }),
+                  onClick: () =>
+                    form.setValue('translateProvider', alternative.id, {
+                      shouldDirty: true,
+                    }),
+                },
+              ]
+            : undefined,
+        });
+      } else if (
+        formData?.subtitleTranslationStyle === 'conversational' &&
+        !provider.isAi
+      ) {
+        list.push({
+          key: 'translation-style',
+          text: t('readiness.translation_style_requires_ai'),
+          actions: [
+            {
+              label: t('presets.language.neutral'),
+              onClick: () =>
+                form.setValue('subtitleTranslationStyle', 'neutral', {
+                  shouldDirty: true,
+                }),
+            },
+          ],
         });
       }
     }
@@ -842,33 +1387,125 @@ export default function TaskWizard() {
     ) {
       list.push({ key: 'goal', text: t('wizard.blockNoGoal') });
     }
+    if (translateOn && formData?.generateSummary === true) {
+      const summaryBlock = validateSummaryProvider(formData, providers);
+      if (summaryBlock) {
+        list.push({
+          key: 'summary',
+          text:
+            summaryBlock === 'follow'
+              ? t('wizard.blockSummaryFollow')
+              : t('wizard.blockSummaryProviderInvalid'),
+          href:
+            summaryBlock === 'invalid' ? `/${locale}/translation` : undefined,
+          actions: [
+            // 快捷操作 A：一键关闭摘要（解除阻断）
+            {
+              label: t('wizard.summaryActionDisable'),
+              onClick: () => {
+                form.setValue('generateSummary', false, { shouldDirty: true });
+              },
+            },
+            // 快捷操作 B：调整摘要（唤起弹层并平滑滚动到控件）
+            {
+              label: t('wizard.summaryActionAdjust'),
+              onClick: () => {
+                setSummaryPopoverOpen(true);
+                const el = document.getElementById('summary-control-container');
+                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              },
+            },
+          ],
+        });
+      }
+    }
     // AI 字幕精修（openspec: add-ai-subtitle-refine D9 即时校验）：
-    // 开启精修但「跟随翻译服务」不可解析（翻译未开启/非 AI 类型）且未显式指定，
+    // 开启精修但跟随不可解析（翻译未开启/非 AI 类型）且未显式指定，
     // 或显式指定的服务商已失效 → 阻断开始，避免运行时才降级。
-    if (
-      inputKind === 'media' &&
-      (formData?.aiSegmentation === true || formData?.aiCorrection === true)
-    ) {
-      const refineSetting = formData?.refineProvider || 'follow-translation';
-      if (refineSetting === 'follow-translation') {
-        const tp = providers.find(
-          (p: any) => p.id === formData?.translateProvider,
+    if (inputKind === 'media') {
+      const refineValidation = validateRefineProviderConfig({
+        formData,
+        providers,
+        translateOn,
+      });
+
+      if (!refineValidation.valid) {
+        const text = getRefineValidationErrorMessage(
+          refineValidation,
+          t,
+          commonT,
         );
-        if (!translateOn || !tp?.isAi) {
-          list.push({
-            key: 'refine',
-            text: t('wizard.blockRefineFollow'),
+        const actions: BlockerAction[] = [];
+
+        // 快捷操作 A：一键关闭（解除阻断）
+        if (refineValidation.feature === 'both') {
+          actions.push({
+            label: t('wizard.refineActionDisableBoth'),
+            onClick: () => {
+              form.setValue('aiSegmentation', false, { shouldDirty: true });
+              form.setValue('aiCorrection', false, { shouldDirty: true });
+            },
+          });
+        } else if (refineValidation.feature === 'correction') {
+          actions.push({
+            label: t('wizard.refineActionDisableCorrection'),
+            onClick: () => {
+              form.setValue('aiCorrection', false, { shouldDirty: true });
+            },
+          });
+        } else if (refineValidation.feature === 'segmentation') {
+          actions.push({
+            label: t('wizard.refineActionDisableSegmentation'),
+            onClick: () => {
+              form.setValue('aiSegmentation', false, { shouldDirty: true });
+            },
           });
         }
-      } else {
-        const rp = providers.find((p: any) => p.id === refineSetting);
-        if (!rp?.isAi || !isProviderConfigured(rp)) {
-          list.push({
-            key: 'refine',
-            text: t('wizard.blockRefineProviderInvalid'),
-            href: `/${locale}/translation`,
+
+        // 快捷操作 B：一键选用已配置的 AI 服务商（如果存在）
+        const availableAiProviders = providers.filter(
+          (p: any) => p?.isAi && isProviderConfigured(p),
+        );
+        if (availableAiProviders.length > 0) {
+          const candidate =
+            availableAiProviders.find(
+              (p: any) => p.id !== formData?.refineProvider,
+            ) || availableAiProviders[0];
+          const candidateName = commonT(`provider.${candidate.name}`, {
+            defaultValue: candidate.name,
+          });
+          actions.push({
+            label: t('wizard.refineActionUseProvider', {
+              name: candidateName,
+            }),
+            onClick: () => {
+              form.setValue('refineProvider', candidate.id, {
+                shouldDirty: true,
+              });
+            },
           });
         }
+
+        // 快捷操作 C：调整精修配置（唤起弹层并平滑滚动到控件）
+        actions.push({
+          label: t('wizard.refineActionAdjust'),
+          onClick: () => {
+            setRefinePopoverOpen(true);
+            const el = document.getElementById('ai-refine-control-container');
+            el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          },
+        });
+
+        list.push({
+          key: 'refine',
+          text,
+          actions,
+          href:
+            refineValidation.reason === 'provider-invalid' ||
+            refineValidation.reason === 'provider-unconfigured'
+              ? `/${locale}/translation`
+              : undefined,
+        });
       }
     }
     return list;
@@ -882,11 +1519,17 @@ export default function TaskWizard() {
     translateOn,
     providers,
     formData?.translateProvider,
+    formData?.generateSummary,
+    formData?.summaryProvider,
+    formData?.subtitleTranslationStyle,
     formData?.transcriptionEngine,
     formData?.model,
+    formData?.asrProviderId,
+    formData?.targetLanguage,
     formData?.aiSegmentation,
     formData?.aiCorrection,
     formData?.refineProvider,
+    formData?.speakerDiarization,
     dubOn,
     activeEngine,
     activeVoice,
@@ -897,9 +1540,14 @@ export default function TaskWizard() {
     videoOn,
     locale,
     t,
+    form,
   ]);
 
-  const canStart = files.length > 0 && blockers.length === 0;
+  const canStart =
+    formLoaded &&
+    dependencies.loaded &&
+    files.length > 0 &&
+    blockers.length === 0;
 
   // ── 存为配方：打包 {goals, accepts, config(字幕段+dub+compose+gates)} ─────
   const [recipeDialogOpen, setRecipeDialogOpen] = useState(false);
@@ -912,9 +1560,9 @@ export default function TaskWizard() {
     try {
       const dubEngine =
         dubOn && activeEngine ? parseEngineKey(activeEngine.key) : null;
-      const config: Partial<IFormData> = stripSpeakerDiarizationConfig({
+      const config: Partial<IFormData> = {
         ...formData,
-      });
+      };
       delete config.taskType;
       delete config.dub;
       delete config.compose;
@@ -961,37 +1609,56 @@ export default function TaskWizard() {
   };
 
   // ── 开始 ──────────────────────────────────────────────────────────────────
-  const [starting, setStarting] = useState(false);
+  const submission = useTaskSubmission({
+    readPending: () => taskDraftManager.getDraft()?.submission,
+    savePending: (pending) => {
+      if (!taskDraftManager.patchDraft({ submission: pending })) {
+        setDraftStorageFailed(true);
+        throw new Error(commonT('draftRecovery.wizardStorageFailed'));
+      }
+    },
+  });
+  const { starting } = submission;
   const handleStart = async () => {
     if (!canStart || starting) return;
-    setStarting(true);
     try {
+      const submittedDraft = taskDraftManager.getDraft();
       const taskFiles =
         inputKind === 'paired'
           ? pairing!.pairs.map((p) => ({
               ...p.media,
               providedSubtitlePath: p.subtitle.filePath,
             }))
-          : files;
-      if (
-        !(await canStartParakeetTask(
-          taskFiles,
-          inputKind !== 'subtitle',
-          formData,
-        ))
-      ) {
-        toast.error(
-          t('parakeet.modelUnavailable', {
-            model: formData?.model || 'Parakeet',
-          }),
-        );
-        return;
-      }
-      const projectId = uuidv4();
+          : inputKind === 'subtitle'
+            ? subtitleFiles
+            : mediaFiles.map((m) => {
+                const pairedScript = pairedManuscriptByMediaPath.get(
+                  m.filePath,
+                );
+                const manualVal = manualManuscriptPairs.get(m.filePath);
+                if (manualVal === '__none__') {
+                  return { ...m, manuscriptPath: '__none__' };
+                }
+                if (pairedScript) {
+                  const msPath = pairedScript.filePath;
+                  const msName =
+                    ('fileName' in pairedScript &&
+                    typeof pairedScript.fileName === 'string'
+                      ? pairedScript.fileName
+                      : null) || msPath.split(/[\\/]/).pop();
+                  return {
+                    ...m,
+                    manuscriptPath: msPath,
+                    manuscriptName: msName,
+                  };
+                }
+                return m;
+              });
+      const projectId = draftProjectIdRef.current;
       const dubEngine = dubOn ? parseEngineKey(activeEngine!.key) : null;
-      const payload = stripSpeakerDiarizationConfig({
+      const payload = enforceSpeakerDiarizationTaskBoundary({
         ...formData,
-        taskType,
+        taskType: typeDef.taskType,
         ...(inputKind !== 'media'
           ? { manuscriptPath: '', manuscriptName: '' }
           : {}),
@@ -1024,19 +1691,38 @@ export default function TaskWizard() {
             }
           : {}),
       });
-      await window?.ipc?.invoke('saveTaskProject', {
-        id: projectId,
-        taskType,
-        files: taskFiles,
-      });
-      window?.ipc?.send('handleTask', {
-        files: taskFiles,
-        formData: payload,
+      const outcome = await submission.submit({
         projectId,
+        files: taskFiles,
+        typeDef,
+        formData: payload,
+        translateOn,
       });
+      if (outcome.status === 'invalid') {
+        toast.error(t(`readiness.${outcome.readiness.errors[0]}`));
+        return;
+      }
+      if (outcome.status !== 'accepted') return;
+      // Edits made while confirmation/IPC was pending belong to the next draft.
+      draftConsumedRef.current = true;
+      const currentDraft = taskDraftManager.getDraft();
+      const intentKey = (draft: TaskDraft | null) => {
+        if (!draft) return '';
+        const { savedAt: _savedAt, submission: _submission, ...intent } = draft;
+        return taskSubmissionKey(intent);
+      };
+      if (intentKey(currentDraft) === intentKey(submittedDraft)) {
+        taskDraftManager.clearDraft();
+      } else if (currentDraft) {
+        taskDraftManager.saveDraft({
+          ...currentDraft,
+          id: uuidv4(),
+          submission: undefined,
+        });
+      }
       router.push(`/${locale}/tasks/${typeDef.slug}?project=${projectId}`);
-    } finally {
-      setStarting(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -1080,8 +1766,108 @@ export default function TaskWizard() {
     },
   ];
 
+  if (!formLoaded)
+    return (
+      <TaskLoadStatus
+        error={formLoadError}
+        loading={formLoading}
+        onRetry={() => void reloadForm()}
+      />
+    );
+
+  if (!dependencies.loaded)
+    return (
+      <TaskLoadStatus
+        error={dependencies.error}
+        loading={dependencies.loading}
+        onRetry={() => void dependencies.load()}
+      />
+    );
+
   return (
     <div className="flex h-full flex-col gap-2.5 overflow-y-auto p-3">
+      <AlertDialog open={draftReadFailed}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {commonT('draftRecovery.readFailedTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {commonT('draftRecovery.readFailedDescription')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!taskDraftManager.clearDraft()) return;
+                setDraftReadFailed(false);
+                setDraftStorageFailed(false);
+                clearDraft();
+                draftInitializedRef.current = true;
+              }}
+            >
+              {commonT('draftRecovery.discard')}
+            </Button>
+            <Button onClick={retryReadDraft}>
+              {commonT('draftRecovery.retryRead')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={Boolean(recoveryDraft)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {commonT('draftRecovery.title')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {commonT('draftRecovery.description')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button variant="outline" onClick={discardWizardDraft}>
+              {commonT('draftRecovery.discard')}
+            </Button>
+            <Button onClick={restoreWizardDraft}>
+              {commonT('draftRecovery.restore')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {draftStorageFailed && (
+        <div
+          role="alert"
+          className="flex shrink-0 items-center gap-3 bg-warning/10 p-3 text-sm"
+        >
+          <span className="min-w-0 flex-1">
+            {commonT('draftRecovery.wizardStorageFailed')}
+          </span>
+          <Button size="sm" variant="outline" onClick={persistWizardDraft}>
+            {commonT('saveState.retry')}
+          </Button>
+        </div>
+      )}
+      {/* 草稿恢复提示条 */}
+      {restoredDraftCount !== null && restoredDraftCount > 0 && (
+        <div className="flex items-center justify-between rounded-md border border-primary/25 bg-primary/5 px-3 py-1.5 text-xs text-primary">
+          <div className="flex items-center gap-2">
+            <Bookmark className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {t('wizard.draftRestored', { count: restoredDraftCount })}
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearDraft}
+            className="h-6 px-2 text-[11px] hover:bg-primary/10 hover:text-primary"
+          >
+            {t('wizard.clearDraft')}
+          </Button>
+        </div>
+      )}
+
       {/* 文件区 */}
       <Panel
         className={cn(
@@ -1203,15 +1989,166 @@ export default function TaskWizard() {
                             </SelectContent>
                           </Select>
                         )}
-                        <button
-                          type="button"
-                          aria-label={t('wizard.pairBrowse')}
-                          title={t('wizard.pairBrowse')}
-                          className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                          onClick={() => handleBrowseSubtitle(file.filePath)}
-                        >
-                          <Upload className="h-3 w-3" />
-                        </button>
+                        {pairing && (
+                          <button
+                            type="button"
+                            aria-label={t('wizard.pairBrowse')}
+                            title={t('wizard.pairBrowse')}
+                            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => handleBrowseSubtitle(file.filePath)}
+                          >
+                            <Upload className="h-3 w-3" />
+                          </button>
+                        )}
+                        {!pairing && inputKind === 'media' && (
+                          <div className="flex items-center gap-1 flex-none">
+                            {pairedManuscriptByMediaPath.get(file.filePath) ? (
+                              <div
+                                className="flex items-center gap-1 rounded border border-primary/30 bg-primary/[0.08] px-1.5 py-0.5 text-[11px] text-primary"
+                                title={
+                                  pairedManuscriptByMediaPath.get(file.filePath)
+                                    ?.filePath
+                                }
+                              >
+                                <FileText className="h-3 w-3 flex-none" />
+                                <span className="max-w-[120px] truncate">
+                                  {t('manuscript.tagSpecific', {
+                                    name:
+                                      'fileName' in
+                                      pairedManuscriptByMediaPath.get(
+                                        file.filePath,
+                                      )!
+                                        ? (
+                                            pairedManuscriptByMediaPath.get(
+                                              file.filePath,
+                                            ) as any
+                                          ).fileName
+                                        : pairedManuscriptByMediaPath
+                                            .get(file.filePath)
+                                            ?.filePath.split(/[\\/]/)
+                                            .pop() || '',
+                                  })}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label={t('manuscript.unlinkScript')}
+                                  title={t('manuscript.unlinkScript')}
+                                  className="rounded p-0.5 hover:bg-primary/20"
+                                  onClick={() =>
+                                    assignManuscript(file.filePath, '__none__')
+                                  }
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ) : manualManuscriptPairs.get(file.filePath) ===
+                              '__none__' ? (
+                              <div className="flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                                <span>{t('manuscript.skipScript')}</span>
+                                <button
+                                  type="button"
+                                  aria-label={t('manuscript.changeScript')}
+                                  title={t('manuscript.changeScript')}
+                                  className="rounded p-0.5 hover:bg-muted"
+                                  onClick={() =>
+                                    assignManuscript(file.filePath, '')
+                                  }
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ) : formData?.manuscriptPath ? (
+                              <div
+                                className="flex items-center gap-1 rounded border border-border/60 bg-muted/20 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                                title={formData.manuscriptPath}
+                              >
+                                <FileText className="h-3 w-3 flex-none opacity-60" />
+                                <span className="max-w-[120px] truncate">
+                                  {t('manuscript.tagGlobal', {
+                                    name:
+                                      formData?.manuscriptName ||
+                                      formData.manuscriptPath
+                                        .split(/[\\/]/)
+                                        .pop() ||
+                                      '',
+                                  })}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label={t('manuscript.changeScript')}
+                                  title={t('manuscript.changeScript')}
+                                  className="rounded p-0.5 hover:bg-muted"
+                                  onClick={() =>
+                                    handleBrowseManuscript(file.filePath)
+                                  }
+                                >
+                                  <Upload className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="flex items-center gap-1 rounded border border-dashed border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
+                                onClick={() =>
+                                  handleBrowseManuscript(file.filePath)
+                                }
+                                title={t('manuscript.hint')}
+                              >
+                                <FileText className="h-3 w-3" />
+                                {t('manuscript.addScript')}
+                              </button>
+                            )}
+
+                            {manuscriptFiles.length > 0 && (
+                              <Select
+                                value={
+                                  manualManuscriptPairs.get(file.filePath) ===
+                                  '__none__'
+                                    ? '__none__'
+                                    : (pairedManuscriptByMediaPath.get(
+                                        file.filePath,
+                                      )?.filePath ?? '')
+                                }
+                                onValueChange={(v) =>
+                                  assignManuscript(file.filePath, v)
+                                }
+                              >
+                                <SelectTrigger
+                                  className="h-6 w-6 p-0 border-none bg-transparent hover:bg-muted"
+                                  title={t('manuscript.changeScript')}
+                                >
+                                  <ChevronRight className="h-3 w-3 rotate-90 text-muted-foreground" />
+                                </SelectTrigger>
+                                <SelectContent className="max-w-[360px]">
+                                  <SelectItem value="__none__">
+                                    {t('manuscript.skipScript')}
+                                  </SelectItem>
+                                  {formData?.manuscriptPath && (
+                                    <SelectItem value="">
+                                      {t('manuscript.tagGlobal', {
+                                        name:
+                                          formData.manuscriptName ||
+                                          formData.manuscriptPath
+                                            .split(/[\\/]/)
+                                            .pop() ||
+                                          '',
+                                      })}
+                                    </SelectItem>
+                                  )}
+                                  {manuscriptFiles.map((sub) => (
+                                    <SelectItem
+                                      key={sub.filePath}
+                                      value={sub.filePath}
+                                    >
+                                      {sub.fileName}
+                                      {sub.fileExtension}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          </div>
+                        )}
                         <button
                           type="button"
                           aria-label={t('wizard.removeFile')}
@@ -1265,6 +2202,75 @@ export default function TaskWizard() {
                     ),
                   )}
                 </ul>
+              )}
+              {/* 参考文稿行：展示导入的参考文稿池 */}
+              {manuscriptFiles.length > 0 && (
+                <div className="space-y-1 pt-2 border-t border-border/50">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
+                    <span>
+                      {t('manuscript.label')} ({manuscriptFiles.length})
+                    </span>
+                    {manuscriptPairing &&
+                      manuscriptPairing.unpairedManuscripts.length > 0 && (
+                        <span className="text-warning text-[10px]">
+                          {t('manuscript.unpairedNonBlockingHint')}
+                        </span>
+                      )}
+                  </div>
+                  <ul className="grid gap-1 sm:grid-cols-2">
+                    {manuscriptFiles.map((file) => {
+                      const isMatched = Array.from(
+                        pairedManuscriptByMediaPath.values(),
+                      ).some((m) => m.filePath === file.filePath);
+                      return (
+                        <li
+                          key={file.filePath}
+                          className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-panel-2 px-2.5 py-1 text-xs"
+                        >
+                          <FileText className="h-3.5 w-3.5 flex-none text-primary/70" />
+                          <span
+                            className="min-w-0 flex-1 truncate"
+                            title={file.filePath}
+                          >
+                            {file.fileName}
+                            {file.fileExtension}
+                          </span>
+                          {isMatched ? (
+                            <span className="flex-none rounded-full border border-primary/40 bg-primary/[0.08] px-2 py-0.5 text-[11px] text-primary">
+                              {t('wizard.pairAttached')}
+                            </span>
+                          ) : (
+                            <span className="flex-none rounded-full border border-muted bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
+                              {t('wizard.pairUnmatched')}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={t('wizard.removeFile')}
+                            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => {
+                              setFiles((prev) =>
+                                prev.filter(
+                                  (f) => f.filePath !== file.filePath,
+                                ),
+                              );
+                              setManualManuscriptPairs((prev) => {
+                                const next = new Map(prev);
+                                prev.forEach((sPath, mPath) => {
+                                  if (sPath === file.filePath)
+                                    next.delete(mPath);
+                                });
+                                return next;
+                              });
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
             </div>
           )}
@@ -1321,14 +2327,40 @@ export default function TaskWizard() {
           </span>
           {chips.map((chip, index) => {
             const Icon = chip.icon;
+            const isManuscriptChip = chip.key === 'manuscript';
+            const configuredCount = isManuscriptChip
+              ? mediaFiles.filter((f) => {
+                  const manual = manualManuscriptPairs.get(f.filePath);
+                  if (manual === '__none__') return false;
+                  return Boolean(
+                    pairedManuscriptByMediaPath.get(f.filePath) ||
+                      formData?.manuscriptPath,
+                  );
+                }).length
+              : 0;
+            const chipTitle = isManuscriptChip
+              ? t('manuscript.chainTooltip', {
+                  matched: configuredCount,
+                  total: mediaFiles.length,
+                })
+              : undefined;
+
             return (
               <React.Fragment key={chip.key}>
                 {index > 0 && (
                   <ChevronRight className="h-3 w-3 flex-none text-faint" />
                 )}
-                <span className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/[0.07] px-2 py-0.5 text-[11px] font-medium text-primary">
+                <span
+                  title={chipTitle}
+                  className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/[0.07] px-2 py-0.5 text-[11px] font-medium text-primary"
+                >
                   <Icon className="h-3 w-3" />
                   {chip.label}
+                  {isManuscriptChip && mediaFiles.length > 1 && (
+                    <span className="text-[10px] opacity-80">
+                      ({configuredCount}/{mediaFiles.length})
+                    </span>
+                  )}
                 </span>
               </React.Fragment>
             );
@@ -1346,6 +2378,10 @@ export default function TaskWizard() {
         <Panel className="flex-none">
           <PanelHeader title={t('wizard.subtitleConfigTitle')} />
           <div className="p-2.5">
+            {/* 内置引擎且需要转写时，CPU 不满足就提前提醒（只提醒，不拦截） */}
+            {formData?.transcriptionEngine === 'builtin' &&
+              inputKind !== 'subtitle' &&
+              inputKind !== 'paired' && <CpuAdvisoryNotice className="mb-2" />}
             <InlineConfigBar
               form={form}
               formData={formData}
@@ -1354,12 +2390,25 @@ export default function TaskWizard() {
               asrProviders={asrProviders as any}
               typeDef={configTypeDef}
               useLocalWhisper={useLocalWhisper}
+              refineOpen={refinePopoverOpen}
+              onRefineOpenChange={setRefinePopoverOpen}
+              summaryOpen={summaryPopoverOpen}
+              onSummaryOpenChange={setSummaryPopoverOpen}
+              onOpenAdvanced={() => setAdvancedOpen(true)}
             />
           </div>
         </Panel>
       )}
 
       {/* 配音配置 */}
+      <AdvancedSheet
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+        form={form}
+        formData={formData}
+        typeDef={configTypeDef}
+        hasMediaInput={inputKind !== 'subtitle'}
+      />
       {dubOn && (
         <Panel className="flex-none">
           <PanelHeader title={t('wizard.dubConfigTitle')} />
@@ -1673,12 +2722,14 @@ export default function TaskWizard() {
         <div className="flex flex-wrap items-center gap-3 p-2.5">
           <div className="min-w-0 flex-1 space-y-1">
             {blockers.map((blocker) => (
-              <p
+              <div
                 key={blocker.key}
-                className="flex items-center gap-1.5 text-xs text-warning"
+                className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-warning"
               >
-                <TriangleAlert className="h-3.5 w-3.5 flex-none" />
-                {blocker.text}
+                <div className="flex items-center gap-1.5">
+                  <TriangleAlert className="h-3.5 w-3.5 flex-none" />
+                  <span>{blocker.text}</span>
+                </div>
                 {blocker.href && (
                   <Link
                     href={blocker.href}
@@ -1688,7 +2739,19 @@ export default function TaskWizard() {
                     <ArrowRight className="h-3 w-3" />
                   </Link>
                 )}
-              </p>
+                {blocker.actions?.map((act, i) => (
+                  <Button
+                    key={i}
+                    type="button"
+                    variant={act.variant || 'outline'}
+                    size="sm"
+                    className="h-6 px-2 text-[11px] font-normal border-warning/40 text-foreground hover:bg-warning/15 hover:text-warning"
+                    onClick={act.onClick}
+                  >
+                    {act.label}
+                  </Button>
+                ))}
+              </div>
             ))}
             {!blockers.length && files.length > 0 && (
               <p className="text-xs text-muted-foreground">
@@ -1705,10 +2768,7 @@ export default function TaskWizard() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                setFiles([]);
-                setManualPairs(new Map());
-              }}
+              onClick={clearDraft}
               className="flex-none"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -1736,6 +2796,7 @@ export default function TaskWizard() {
         </div>
       </Panel>
 
+      {submission.dialog}
       {/* 存为配方：命名对话框 */}
       <Dialog open={recipeDialogOpen} onOpenChange={setRecipeDialogOpen}>
         <DialogContent className="sm:max-w-md">

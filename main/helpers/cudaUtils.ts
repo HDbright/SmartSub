@@ -5,6 +5,9 @@ import * as path from 'path';
 import * as si from 'systeminformation';
 import { logMessage } from './storeManager';
 import { getExtraResourcesPath, isAppleSilicon } from './utils';
+import { enumerateGenericGpus } from './gpuEnumeration';
+import { runCommandOrThrow } from './runCommand';
+import { createSingleFlightCache } from './singleFlightCache';
 
 /**
  * 异步执行外部命令（不阻塞主进程 event loop）。
@@ -26,6 +29,10 @@ import type {
 } from '../../types/addon';
 import { AVAILABLE_CUDA_VERSIONS } from '../../types/addon';
 import { parseNvidiaSmiGpuList } from '../../types/gpuDevice';
+import {
+  attachComputeCapabilities,
+  parseNvidiaSmiComputeCaps,
+} from './crash/cudaCompat';
 
 /**
  * 开发模式模拟配置
@@ -426,6 +433,27 @@ const NVIDIA_GPU_QUERY_ARGS = [
   '--format=csv,noheader,nounits',
 ];
 
+/**
+ * 单独查询各显卡的算力（compute capability）。故意不并入上面 index,uuid,name 那条查询：
+ * 较老的驱动不认识 compute_cap 字段，会让整条查询失败，连累显卡枚举与设备选择。
+ * 查询失败时返回空表，调用方把算力当作未知（未知时不会据此过滤任何加速包）。
+ */
+async function queryNvidiaComputeCaps(
+  timeoutMs = 5000,
+): Promise<Map<string, number>> {
+  if (!isPlatformCudaCapable()) return new Map();
+  try {
+    const { stdout } = await execFileAsync(
+      'nvidia-smi',
+      ['--query-gpu=uuid,compute_cap', '--format=csv,noheader,nounits'],
+      { encoding: 'utf8', timeout: timeoutMs },
+    );
+    return parseNvidiaSmiComputeCaps(String(stdout));
+  } catch {
+    return new Map();
+  }
+}
+
 export interface NvidiaGpuEnumerationResult {
   status: 'success' | 'failed';
   gpus: GpuInfo[];
@@ -480,7 +508,8 @@ export async function enumerateNvidiaGpus(
 }
 
 /**
- * 枚举显卡（systeminformation，跨平台），带 10s 超时与 dev 模拟。
+ * 枚举显卡：Windows 用单个 PowerShell 探测（不能走 systeminformation，见 gpuEnumeration.ts），
+ * 其他平台用 systeminformation.graphics()（10s 超时），并支持 dev 模拟。
  * NVIDIA 设备优先使用 nvidia-smi，以获得 CUDA 索引与跨重启稳定的 UUID。
  */
 async function detectGpus(): Promise<GpuInfo[]> {
@@ -495,22 +524,32 @@ async function detectGpus(): Promise<GpuInfo[]> {
     return [{ name: `Simulated ${vendor.toUpperCase()} GPU`, vendor }];
   }
 
-  const nvidiaGpusPromise = enumerateNvidiaGpus(10000).then(
-    (result) => result.gpus,
-  );
+  const nvidiaGpusPromise = enumerateNvidiaGpus(10000).then(async (result) => {
+    if (result.gpus.length === 0) return result.gpus;
+    const caps = await queryNvidiaComputeCaps();
+    const gpus = attachComputeCapabilities(result.gpus, caps);
+    logMessage(
+      caps.size > 0
+        ? `NVIDIA compute capability: ${gpus
+            .map((gpu) => `${gpu.name}=${gpu.computeCapability ?? 'unknown'}`)
+            .join(', ')}`
+        : 'NVIDIA compute capability unavailable (driver does not report compute_cap)',
+      'info',
+    );
+    return gpus;
+  });
   try {
-    const graphics = await Promise.race([
-      si.graphics(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('GPU detection timeout')), 10000),
-      ),
-    ]);
-    const genericGpus = (graphics.controllers || [])
-      .filter((c) => c.model || c.vendor)
-      .map((c) => ({
-        name: c.model || c.vendor || 'Unknown GPU',
-        vendor: normalizeGpuVendor(c.vendor || '', c.model || ''),
-      }));
+    // Windows 不能走 si.graphics()：它会引发主进程里没人接的 write EPIPE，见 gpuEnumeration.ts
+    const rawGpus = await enumerateGenericGpus({
+      platform: process.platform,
+      siGraphics: () => si.graphics(),
+      run: runCommandOrThrow,
+      systemRoot: process.env.SystemRoot || process.env.windir,
+    });
+    const genericGpus = rawGpus.map((gpu) => ({
+      name: gpu.model || gpu.vendor || 'Unknown GPU',
+      vendor: normalizeGpuVendor(gpu.vendor, gpu.model),
+    }));
     const nvidiaGpus = await nvidiaGpusPromise;
     if (nvidiaGpus.length === 0) return genericGpus;
     return [
@@ -569,18 +608,7 @@ export function getBuiltinVulkanAddonPath(): string {
   return path.join(getExtraResourcesPath(), 'addons', 'addon.vulkan.node');
 }
 
-let cachedGpuEnvironment: GpuEnvironment | null = null;
-
-/**
- * 获取完整 GPU 环境（跨厂商）。结果会话级缓存，forceRefresh 重新检测。
- */
-export async function getGpuEnvironment(
-  forceRefresh = false,
-): Promise<GpuEnvironment> {
-  if (cachedGpuEnvironment && !forceRefresh) {
-    return cachedGpuEnvironment;
-  }
-
+async function probeGpuEnvironment(): Promise<GpuEnvironment> {
   const platform = getEffectivePlatform();
   const gpus = await detectGpus();
   const vulkanRuntime = isPlatformCudaCapable() ? detectVulkanRuntime() : false;
@@ -594,7 +622,7 @@ export async function getGpuEnvironment(
     (hasNvidia || gpus.length === 0 || !!getDevSimulationConfig()?.enabled);
   const nvidia = shouldProbeNvidia ? await getCudaEnvironment() : null;
 
-  cachedGpuEnvironment = {
+  const environment: GpuEnvironment = {
     platform,
     appleSilicon: isAppleSilicon(),
     gpus,
@@ -603,12 +631,27 @@ export async function getGpuEnvironment(
     nvidia,
   };
   logMessage(
-    `GPU Environment: ${JSON.stringify({ ...cachedGpuEnvironment, nvidia: nvidia ? 'detected' : null })}`,
+    `GPU Environment: ${JSON.stringify({ ...environment, nvidia: nvidia ? 'detected' : null })}`,
     'info',
   );
-  return cachedGpuEnvironment;
+  return environment;
+}
+
+/**
+ * 会话级缓存 + 单飞：启动期有好几处几乎同时来要 GPU 环境（主进程预热、渲染进程的几处 IPC、
+ * 任务开始时的 addonLoader），它们共享同一次探测，而不是各自把一整套外部进程再起一遍。
+ */
+const gpuEnvironmentCache = createSingleFlightCache(probeGpuEnvironment);
+
+/**
+ * 获取完整 GPU 环境（跨厂商）。结果会话级缓存，forceRefresh 重新检测。
+ */
+export async function getGpuEnvironment(
+  forceRefresh = false,
+): Promise<GpuEnvironment> {
+  return gpuEnvironmentCache.get(forceRefresh);
 }
 
 export function clearGpuEnvironmentCache(): void {
-  cachedGpuEnvironment = null;
+  gpuEnvironmentCache.clear();
 }

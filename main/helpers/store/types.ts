@@ -101,6 +101,11 @@ export type StoreType = {
       model?: string;
       asrProviderId?: string;
     };
+    /**
+     * 通读摘要提示词用户稿。空 / 缺省回落 types/summaryPrompt.ts 的出厂模板，
+     * 不做首启动写死，避免锁死后续出厂更新。
+     */
+    summaryPrompt?: string;
     fasterWhisperDevice?: 'auto' | 'cpu' | 'cuda';
     fasterWhisperComputeType?: string;
     fasterWhisperModelsPath?: string;
@@ -203,6 +208,7 @@ export type StoreType = {
    * 探测不可用时，UI 回落 CPU 显示且不改写存储值（换回有硬件的环境自动恢复）。
    */
   mergePreferences?: {
+    softContainer?: 'mkv' | 'mp4';
     outputMode?: MergeOutputMode;
     videoQuality?: VideoQuality;
     encoderMode?: EncoderMode;

@@ -18,6 +18,7 @@ import {
   AlertCircle,
   AudioLines,
   BookOpenText,
+  Boxes,
   Captions,
   CheckCircle2,
   Clapperboard,
@@ -46,6 +47,7 @@ import {
   SkipBack,
   SkipForward,
   Square,
+  Sparkles,
   X,
   Zap,
   type LucideIcon,
@@ -62,9 +64,14 @@ import { repeatPlaybackBus } from './repeat/playbackBus';
 import { formatClock } from './repeat/repeatUtils';
 import type { RepeatPlaybackStatus } from './repeat/playbackBus';
 import ActivityCenter from './ActivityCenter';
+import AssistantPanel from './assistant/AssistantPanel';
+import { useAssistant } from '../context/AssistantContext';
 import CommandPalette from './CommandPalette';
 import { cn, openUrl } from 'lib/utils';
 import { hasAnyModelAnyEngine } from 'lib/engineModels';
+import { isProviderConfigured } from '../../types/provider';
+import { isAsrProviderConfigured } from '../../types/asrProvider';
+import { isTtsProviderConfigured } from '../../types/ttsProvider';
 import { TASK_TYPES } from 'lib/taskTypes';
 import { useRouter } from 'next/router';
 import { toast } from 'sonner';
@@ -73,6 +80,8 @@ import { useTranslation } from 'next-i18next';
 import { useTheme } from 'next-themes';
 import { UpdateDialog } from './UpdateDialog';
 import { LogDialog } from './LogDialog';
+import { DiagnosticsDialog } from './diagnostics/DiagnosticsDialog';
+import { PreviousRunNoticeToast } from './diagnostics/PreviousRunNoticeToast';
 import OnboardingDialog from './onboarding/OnboardingDialog';
 import ShortcutsHelpDialog from './ShortcutsHelpDialog';
 import FaqDialog from './FaqDialog';
@@ -109,7 +118,10 @@ const NAV_TASK_ITEMS: NavItemDef[] = [
     href: 'home',
     labelKey: 'nav.launchpad',
     icon: Home,
-    isActive: (p) => p.includes('home') || p.includes('recent-tasks'),
+    isActive: (p) =>
+      p.includes('home') ||
+      p.includes('recent-tasks') ||
+      p.includes('/processing-result'),
   },
   {
     href: 'download',
@@ -140,6 +152,12 @@ const NAV_TASK_ITEMS: NavItemDef[] = [
     labelKey: 'nav.dubbing',
     icon: Mic,
     isActive: (p) => p.includes('/dubbing'),
+  },
+  {
+    href: 'toolbox',
+    labelKey: 'nav.toolbox',
+    icon: Boxes,
+    isActive: (p) => p.includes('/toolbox'),
   },
 ];
 
@@ -211,6 +229,7 @@ const PREFETCH_NAMESPACES = [
   'modelsControl',
   'download',
   'repeat',
+  'toolbox',
 ];
 
 /** 竖排导航项：图标在上、文字在下（P0 导航规范），选中态 = soft 底 + 左缘指示条 */
@@ -219,21 +238,27 @@ function NavItem({
   locale,
   asPath,
   label,
+  hrefOverride,
+  onClick,
 }: {
   item: NavItemDef;
   locale: string;
   asPath: string;
   label: string;
+  hrefOverride?: string;
+  onClick?: (e: React.MouseEvent) => void;
 }) {
   const Icon = item.icon;
   const active = item.isActive(asPath);
+  const targetHref = hrefOverride ?? item.href;
   return (
     <Link
-      href={`/${locale}/${item.href}`}
+      href={`/${locale}/${targetHref}`}
       aria-label={label}
       aria-current={active ? 'page' : undefined}
+      onClick={onClick}
       className={cn(
-        'titlebar-no-drag relative flex h-12 w-[52px] flex-col items-center justify-center gap-1 rounded-lg transition-colors',
+        'titlebar-no-drag relative flex h-12 w-[52px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg transition-colors [@media(max-height:760px)]:h-10',
         active
           ? 'bg-primary/10 text-primary before:absolute before:inset-y-3 before:-left-1.5 before:w-[3px] before:rounded-r-full before:bg-primary'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -250,6 +275,7 @@ function NavItem({
 const openAfterMenuClose = (open: () => void) => setTimeout(open, 0);
 
 const Layout = ({ children }) => {
+  const assistant = useAssistant();
   const { t, i18n } = useTranslation('common');
   const { resolvedTheme } = useTheme();
   const locale = i18n.language;
@@ -280,10 +306,65 @@ const Layout = ({ children }) => {
     gpuMode: GpuMode;
   } | null>(null);
   const [showLogs, setShowLogs] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showFaq, setShowFaq] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [lastSubtitleSlug, setLastSubtitleSlug] =
+    useState('generate-translate');
+
+  useEffect(() => {
+    const syncFromStorage = () => {
+      try {
+        const saved = localStorage.getItem('lastSubtitleTaskType');
+        if (
+          saved &&
+          ['generate-translate', 'generate', 'translate'].includes(saved)
+        ) {
+          setLastSubtitleSlug(saved);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    syncFromStorage();
+
+    const handleCustomChange = (e: CustomEvent<string>) => {
+      if (
+        e.detail &&
+        ['generate-translate', 'generate', 'translate'].includes(e.detail)
+      ) {
+        setLastSubtitleSlug(e.detail);
+      }
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (
+        e.key === 'lastSubtitleTaskType' &&
+        e.newValue &&
+        ['generate-translate', 'generate', 'translate'].includes(e.newValue)
+      ) {
+        setLastSubtitleSlug(e.newValue);
+      }
+    };
+
+    window.addEventListener(
+      'last-subtitle-task-type-changed',
+      handleCustomChange as EventListener,
+    );
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener(
+        'last-subtitle-task-type-changed',
+        handleCustomChange as EventListener,
+      );
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, []);
+
   // SSR / 首屏与静态导出一致：平台相关布局仅在 mount 后写入，避免水合不一致
   const [modKey, setModKey] = useState('⌘');
   const [isMac, setIsMac] = useState(false);
@@ -303,6 +384,15 @@ const Layout = ({ children }) => {
   const [repeatStatus, setRepeatStatus] = useState<RepeatPlaybackStatus | null>(
     null,
   );
+  // 多维健康度状态：本地模型是否具备、云服务是否已配置
+  const [hasLocalModels, setHasLocalModels] = useState<boolean | null>(null);
+  const [hasCloudProviders, setHasCloudProviders] = useState<boolean | null>(
+    null,
+  );
+  const [healthError, setHealthError] = useState(false);
+  const [cloudHealth, setCloudHealth] = useState<
+    Array<{ name: string; status: string }>
+  >([]);
   // 在线视频下载全局摘要（状态栏 pill；主进程仅在内容变化时广播）
   const [videoDownload, setVideoDownload] = useState<{
     running: boolean;
@@ -430,6 +520,9 @@ const Layout = ({ children }) => {
     // 设置页「关于」卡触发的查看日志
     const handleAppOpenLogs = () => setShowLogs(true);
     window.addEventListener('app-open-logs', handleAppOpenLogs);
+    // 设置页「关于」卡与异常退出提示触发的导出诊断包
+    const handleAppOpenDiagnostics = () => setShowDiagnostics(true);
+    window.addEventListener('app-open-diagnostics', handleAppOpenDiagnostics);
 
     const backendLabels: Record<string, string> = {
       cuda: 'CUDA',
@@ -571,6 +664,10 @@ const Layout = ({ children }) => {
       );
       window.removeEventListener('app-check-updates', handleAppCheckUpdates);
       window.removeEventListener('app-open-logs', handleAppOpenLogs);
+      window.removeEventListener(
+        'app-open-diagnostics',
+        handleAppOpenDiagnostics,
+      );
     };
   }, [t, checkUpdatesManually]);
 
@@ -594,6 +691,65 @@ const Layout = ({ children }) => {
       disposed = true;
       clearInterval(interval);
       cleanupComplete?.();
+    };
+  }, []);
+
+  // 检查引擎、模型与服务健康度
+  useEffect(() => {
+    let disposed = false;
+    const checkHealth = async () => {
+      try {
+        const [info, asrProviders, transProviders, ttsProviders, health] =
+          await Promise.all([
+            window.ipc.invoke('getSystemInfo', null),
+            window.ipc.invoke('getAsrProviders'),
+            window.ipc.invoke('getTranslationProviders'),
+            window.ipc.invoke('getTtsProviders'),
+            window.ipc.invoke('getProviderHealth'),
+          ]);
+        if (!disposed) {
+          setHealthError(false);
+          setHasLocalModels(hasAnyModelAnyEngine(info));
+          const configured = [
+            ...(asrProviders || [])
+              .filter((p: any) => isAsrProviderConfigured(p))
+              .map((p: any) => ({ ...p, kind: 'asr' })),
+            ...(transProviders || [])
+              .filter((p: any) => isProviderConfigured(p))
+              .map((p: any) => ({ ...p, kind: 'translation' })),
+            ...(ttsProviders || [])
+              .filter((p: any) => isTtsProviderConfigured(p))
+              .map((p: any) => ({ ...p, kind: 'tts' })),
+          ];
+          setHasCloudProviders(configured.length > 0);
+          setCloudHealth(
+            configured.map((provider) => ({
+              name: provider.name,
+              status:
+                (health || []).find(
+                  (result: any) =>
+                    result.id === provider.id && result.kind === provider.kind,
+                )?.status || 'unverified',
+            })),
+          );
+        }
+      } catch (err) {
+        console.error('Failed to check health in Layout:', err);
+        if (!disposed) setHealthError(true);
+      }
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 10000);
+    const cleanupDownload = window.ipc.on(
+      'downloadProgress',
+      (_model: string, progress: number) => {
+        if (progress === 1) void checkHealth();
+      },
+    );
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+      cleanupDownload?.();
     };
   }, []);
 
@@ -735,7 +891,7 @@ const Layout = ({ children }) => {
           底部预留 26px 给全宽状态栏。 */}
       <aside
         className={cn(
-          'titlebar-drag fixed left-0 top-0 bottom-[26px] z-20 flex w-16 flex-col items-center gap-0.5 border-r border-border bg-chrome px-1.5 pb-2',
+          'titlebar-drag fixed left-0 top-0 bottom-[26px] z-20 flex w-16 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto border-r border-border bg-chrome px-1.5 pb-2',
           !isMac && 'pt-2.5',
         )}
       >
@@ -749,7 +905,7 @@ const Layout = ({ children }) => {
         <Link
           href={`/${locale}/home`}
           aria-label="Home"
-          className="titlebar-no-drag mb-2 flex h-9 w-9 items-center justify-center"
+          className="titlebar-no-drag mb-2 flex h-9 w-9 shrink-0 items-center justify-center"
         >
           <Image
             src="/images/brand/logo-mark.png"
@@ -760,19 +916,42 @@ const Layout = ({ children }) => {
             priority
           />
         </Link>
-        <nav className="flex flex-col items-center gap-0.5" aria-label="tasks">
-          {NAV_TASK_ITEMS.map((item) => (
-            <NavItem
-              key={item.href}
-              item={item}
-              locale={locale}
-              asPath={asPath}
-              label={t(item.labelKey)}
-            />
-          ))}
+        <nav
+          className="flex shrink-0 flex-col items-center gap-0.5"
+          aria-label="tasks"
+        >
+          {NAV_TASK_ITEMS.map((item) => {
+            const isSubtitles = item.labelKey === 'nav.subtitles';
+            const hrefOverride = isSubtitles
+              ? `tasks/${lastSubtitleSlug}`
+              : undefined;
+            const handleClick = (e: React.MouseEvent) => {
+              if (isSubtitles && asPath.includes('/tasks/')) {
+                // 已在任务页内部，点击侧栏「字幕」不强制跳转，保持当前正在查看的任务页
+                e.preventDefault();
+              }
+            };
+            return (
+              <NavItem
+                key={item.href}
+                item={item}
+                locale={locale}
+                asPath={asPath}
+                label={t(item.labelKey)}
+                hrefOverride={hrefOverride}
+                onClick={handleClick}
+              />
+            );
+          })}
         </nav>
-        <div className="my-1.5 h-px w-7 bg-border-strong" role="separator" />
-        <nav className="flex flex-col items-center gap-0.5" aria-label="config">
+        <div
+          className="my-1.5 h-px w-7 shrink-0 bg-border-strong"
+          role="separator"
+        />
+        <nav
+          className="flex shrink-0 flex-col items-center gap-0.5"
+          aria-label="config"
+        >
           {NAV_CONFIG_ITEMS.map((item) => (
             <NavItem
               key={item.href}
@@ -784,7 +963,10 @@ const Layout = ({ children }) => {
           ))}
         </nav>
         <div className="flex-1" />
-        <div className="mb-0.5 h-px w-7 bg-border-strong" role="separator" />
+        <div
+          className="mb-0.5 h-px w-7 shrink-0 bg-border-strong"
+          role="separator"
+        />
         <NavItem
           item={NAV_SETTINGS_ITEM}
           locale={locale}
@@ -977,49 +1159,135 @@ const Layout = ({ children }) => {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('assistant.title')}
+              title={`${t('assistant.title')} (${isMac ? '⌘J' : 'Ctrl+J'})`}
+              aria-keyshortcuts={isMac ? 'Meta+J' : 'Control+J'}
+              data-assistant-toggle
+              aria-expanded={assistant?.open || false}
+              onClick={() => assistant?.setOpen(!assistant.open)}
+            >
+              <Sparkles className="mr-1.5 h-4 w-4 text-primary" />
+              {t('assistant.title')}
+            </Button>
             <ThemeToggle />
           </div>
         </header>
-        <div className="relative min-h-0 flex-1">
-          <main className="absolute inset-0 overflow-auto">{children}</main>
-          {repeatMounted && (
-            <div
-              className={cn(
-                'absolute inset-0 z-10 bg-background p-3',
-                !onRepeat && 'hidden',
-              )}
-            >
-              <RepeatWorkbench active={onRepeat} />
-            </div>
-          )}
+        <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+          {/* 复读页保活：主内容包在 relative 容器里，切页后 RepeatWorkbench 常驻隐藏挂载 */}
+          <div className="relative min-h-0 flex-1">
+            <main className="absolute inset-0 overflow-auto">{children}</main>
+            {repeatMounted && (
+              <div
+                className={cn(
+                  'absolute inset-0 z-10 bg-background p-3',
+                  !onRepeat && 'hidden',
+                )}
+              >
+                <RepeatWorkbench active={onRepeat} />
+              </div>
+            )}
+          </div>
+          <AssistantPanel />
         </div>
-        <Toaster />
+        <Toaster position={assistant?.open ? 'top-center' : 'bottom-right'} />
       </div>
 
-      {/* 底部全宽状态栏：引擎/GPU/队列/下载常显，仪表盘式定位信息 */}
+      {/* 底部全宽状态栏：解耦引擎模型、云服务、GPU与队列指示 */}
       <footer className="titlebar-drag fixed bottom-0 inset-x-0 z-20 flex h-[26px] items-center gap-4 border-t border-border bg-chrome px-3 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5 whitespace-nowrap">
+        {/* 本地模型指示 */}
+        <button
+          type="button"
+          onClick={() => router.push(`/${locale}/engines`)}
+          className="titlebar-no-drag flex items-center gap-1.5 whitespace-nowrap transition-colors hover:text-foreground"
+        >
           <span
             className={cn(
               'h-[7px] w-[7px] rounded-full',
-              accelBadge?.mode === 'warning'
-                ? 'bg-warning shadow-[0_0_0_3px_hsl(var(--warning)/0.15)]'
+              healthError || hasLocalModels === null
+                ? 'bg-muted-foreground/60'
+                : hasLocalModels === false
+                  ? 'bg-warning shadow-[0_0_0_3px_hsl(var(--warning)/0.15)]'
+                  : 'bg-success shadow-[0_0_0_3px_hsl(var(--success)/0.15)]',
+            )}
+          />
+          {healthError
+            ? t('statusbar.checkFailed')
+            : hasLocalModels === null
+              ? t('statusbar.checking')
+              : hasLocalModels === false
+                ? t('statusbar.modelMissing')
+                : t('statusbar.modelReady')}
+        </button>
+
+        {/* 云服务指示 */}
+        <button
+          type="button"
+          onClick={() => router.push(`/${locale}/translation`)}
+          title={cloudHealth
+            .map(
+              (provider) =>
+                `${provider.name}: ${t(`statusbar.${provider.status}`)}`,
+            )
+            .join('\n')}
+          className="titlebar-no-drag flex items-center gap-1.5 whitespace-nowrap transition-colors hover:text-foreground"
+        >
+          <span
+            className={cn(
+              'h-[7px] w-[7px] rounded-full',
+              healthError ||
+                cloudHealth.some((provider) => provider.status === 'failed') ||
+                !cloudHealth.some((provider) => provider.status === 'connected')
+                ? 'bg-muted-foreground/60 shadow-[0_0_0_3px_hsl(var(--muted-foreground)/0.15)]'
                 : 'bg-success shadow-[0_0_0_3px_hsl(var(--success)/0.15)]',
             )}
           />
-          {t('statusbar.engineReady')}
-        </span>
+          {healthError
+            ? t('statusbar.checkFailed')
+            : hasCloudProviders === null
+              ? t('statusbar.checking')
+              : hasCloudProviders === false
+                ? t('statusbar.serviceMissing')
+                : cloudHealth.some((provider) => provider.status === 'failed')
+                  ? t('statusbar.serviceFailed')
+                  : cloudHealth.some(
+                        (provider) => provider.status === 'connected',
+                      )
+                    ? t('statusbar.serviceConnected', {
+                        count: cloudHealth.filter(
+                          (provider) => provider.status === 'connected',
+                        ).length,
+                      })
+                    : t('statusbar.unverified')}
+        </button>
+
+        {/* GPU / 硬件加速 */}
         {accelBadge && (
-          <span className="whitespace-nowrap">
-            GPU:{' '}
-            <span className="font-medium text-foreground">
+          <button
+            type="button"
+            onClick={() => router.push(`/${locale}/settings`)}
+            className="titlebar-no-drag flex items-center gap-1.5 whitespace-nowrap transition-colors hover:text-foreground"
+          >
+            <span
+              className={cn(
+                'h-[7px] w-[7px] rounded-full',
+                accelBadge.mode === 'accel'
+                  ? 'bg-success shadow-[0_0_0_3px_hsl(var(--success)/0.15)]'
+                  : accelBadge.mode === 'warning'
+                    ? 'bg-warning shadow-[0_0_0_3px_hsl(var(--warning)/0.15)]'
+                    : 'bg-muted-foreground/60 shadow-[0_0_0_3px_hsl(var(--muted-foreground)/0.15)]',
+              )}
+            />
+            <span>
               {accelBadge.mode === 'accel' && accelBadge.label
-                ? accelBadge.label
+                ? `${t('statusbar.gpuAccel')}: ${accelBadge.label}`
                 : accelBadge.mode === 'pending'
-                  ? t('statusbar.gpuPending')
-                  : 'CPU'}
+                  ? `GPU: ${t('statusbar.gpuPending')}`
+                  : t('statusbar.cpuMode')}
             </span>
-          </span>
+          </button>
         )}
         {taskRunning && (
           <button
@@ -1171,6 +1439,11 @@ const Layout = ({ children }) => {
         releaseNotes={releaseNotes}
       />
       <LogDialog open={showLogs} onOpenChange={setShowLogs} />
+      <DiagnosticsDialog
+        open={showDiagnostics}
+        onOpenChange={setShowDiagnostics}
+      />
+      <PreviousRunNoticeToast />
       <ShortcutsHelpDialog
         open={showShortcuts}
         onOpenChange={setShowShortcuts}
@@ -1186,6 +1459,7 @@ const Layout = ({ children }) => {
         open={showCommandPalette}
         onOpenChange={setShowCommandPalette}
         locale={locale}
+        lastSubtitleSlug={lastSubtitleSlug}
         onCheckUpdates={checkUpdatesManually}
         onOpenLogs={() => setShowLogs(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}

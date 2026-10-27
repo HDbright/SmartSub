@@ -1,5 +1,11 @@
 // 必须是第一个 import：放大 libuv 线程池（首个异步 I/O 后定型，不可再改）
 import './helpers/uvThreadPool';
+import { backgroundOnly } from './automation/bootstrap';
+import { createWindowPort } from './automation/events';
+import { startAutomationServer } from './automation/server';
+import { AutomationService } from './automation/service';
+import { setupAssistantHandlers } from './assistant/ipc';
+import { setupMcpConfigHandlers } from './automation/mcpSetup';
 
 // 在最开始加载环境变量（仅开发模式；路径相对 app/ 编译产物）
 if (process.env.NODE_ENV !== 'production') {
@@ -13,7 +19,7 @@ import * as fs from 'fs';
 
 // 跟读录音提示音在按键后数秒才播放（用户激活已过期）：放行自动播放策略
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-import { app, protocol, session, ipcMain } from 'electron';
+import { app, dialog, protocol, session, ipcMain } from 'electron';
 import serve from 'electron-serve';
 import { createWindow } from './helpers/create-window';
 import { setupIpcHandlers } from './helpers/ipcHandlers';
@@ -23,14 +29,24 @@ import { setupStoreHandlers, store, logMessage } from './helpers/storeManager';
 import { setupTaskManager } from './helpers/taskManager';
 import {
   initializeWorkItemStore,
-  setupWorkItemStoreLifecycle,
+  flushWorkItemStore,
 } from './helpers/workItemStore';
 import { setupWorkItemHandlers } from './helpers/workItemHandlers';
 import { setupRecipeHandlers } from './helpers/ipcRecipeHandlers';
 import { setupGlossaryHandlers } from './helpers/ipcGlossaryHandlers';
+import { setupDiagnosticsHandlers } from './helpers/ipcDiagnosticsHandlers';
 import { setupAutoUpdater } from './helpers/updater';
+import {
+  initCrashDiagnostics,
+  markCrashMonitorShuttingDown,
+} from './helpers/crash/crashReporting';
+import { markCleanExit } from './helpers/crash/runLifecycle';
 import { setupAppMenu } from './helpers/menu';
-import { setupWindowCloseBehavior, markQuitting } from './helpers/windowClose';
+import {
+  setupWindowCloseBehavior,
+  markQuitting,
+  confirmUnsavedWindows,
+} from './helpers/windowClose';
 import { setupParameterHandlers } from './helpers/ipcParameterHandlers';
 import { setupRepeatLibraryDb } from './helpers/repeatLibraryDb';
 import { setupMediaMetaHandlers } from './helpers/mediaMeta';
@@ -41,6 +57,10 @@ import { setupDubbingHandlers } from './helpers/ipcDubbingHandlers';
 import { setupPipelineHandlers } from './helpers/ipcPipelineHandlers';
 import { setupVoiceCloneHandlers } from './helpers/ipcVoiceCloneHandlers';
 import { setupVideoDownloadHandlers } from './helpers/ipcVideoDownloadHandlers';
+import {
+  setupToolboxHandlers,
+  shutdownToolboxProcesses,
+} from './helpers/toolbox/ipcToolboxHandlers';
 import { shutdownVideoDownloads } from './helpers/videoDownload/scheduler';
 import { configurationManager } from './service/configurationManager';
 import {
@@ -72,6 +92,7 @@ import {
 } from './helpers/cudaDeviceSelection';
 import { sanitizeSelectedCudaDevice } from '../types/gpuDevice';
 import { cleanupOldLogs } from './helpers/logStorage';
+import { cancelProofreadWaveforms } from './helpers/proofreadWaveform';
 import {
   getHiddenNativeTitleBarOptions,
   setupWindowChromeHandlers,
@@ -103,22 +124,52 @@ setAppDisplayNameEarly();
 
 if (isProd) {
   serve({ directory: 'app' });
-} else {
-  app.setPath('userData', `${app.getPath('userData')}-dev`);
 }
+
+let showDesktop: (() => Promise<void>) | undefined;
+let desktopRequested = !backgroundOnly;
+app.on('second-instance', (_event, _argv, _cwd, data: any) => {
+  if (!data?.backgroundOnly) {
+    desktopRequested = true;
+    void showDesktop?.();
+  }
+});
 
 let runtimeShutdownDone = false;
 app.on('before-quit', (event) => {
+  if (!runtimeShutdownDone && !confirmUnsavedWindows()) {
+    event.preventDefault();
+    return;
+  }
+  try {
+    flushWorkItemStore();
+  } catch (error) {
+    event.preventDefault();
+    const zh = store.get('settings')?.language === 'zh';
+    dialog.showErrorBox(
+      zh ? '任务状态保存失败' : 'Task state could not be saved',
+      `${zh ? '退出已取消。请检查磁盘空间和目录权限后重试。' : 'Quit was cancelled. Check disk space and directory permissions, then retry.'}\n${String(error)}`,
+    );
+    return;
+  }
   // 真退出标记集中在 windowClose 模块，close 监听据此放行
   markQuitting();
+  // 退出过程中子进程被终止属于正常现象，崩溃监视器此后只记真正的崩溃
+  markCrashMonitorShuttingDown();
   if (!runtimeShutdownDone) {
     event.preventDefault();
     runtimeShutdownDone = true;
     // 同步终止下载器子进程并清理 cookie 临时副本（否则子进程变孤儿继续下载）
     shutdownVideoDownloads();
+    shutdownToolboxProcesses();
+    cancelProofreadWaveforms();
     void shutdownPythonRuntime().finally(() => {
+      // 走到这里才算“正常退出”：之后进程被收尾崩溃的话，下次启动仍能看到证据
+      markCleanExit();
       app.exit(0);
     });
+  } else {
+    markCleanExit();
   }
 });
 
@@ -185,6 +236,8 @@ app.on('before-quit', (event) => {
   });
 
   setupStoreHandlers();
+  // 崩溃事件接入应用日志，并清理过期的崩溃事件与转储（crashReporter 已在 bootstrap 中启动）
+  initCrashDiagnostics(logMessage);
   // 日志已迁移到按日 JSONL 文件：清理过期文件，并移除旧版本遗留在 config.json 中的 logs 键
   void cleanupOldLogs();
   const legacyStore = store as unknown as {
@@ -273,56 +326,78 @@ app.on('before-quit', (event) => {
   const settings = store.get('settings');
   const userLanguage = settings?.language || 'zh'; // 默认为中文
 
-  const mainWindow = createWindow('main', {
-    width: 1280,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 700,
-    icon: resolveAppIcon(),
-    ...getHiddenNativeTitleBarOptions(),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      // 本地媒体经 media:// 协议加载；紧急回退 SMARTSUB_LEGACY_WEB_SECURITY=true
-      webSecurity: !useLegacyWebSecurity,
-    },
-  });
+  let desktopWindow: Electron.BrowserWindow | undefined;
+  let updaterRegistered = false;
+  const mainWindow = createWindowPort(() => desktopWindow);
+  const rendererUrl = isProd
+    ? `app://./${userLanguage}/home/`
+    : `http://localhost:${process.argv.find((arg) => /^\d+$/.test(arg)) || '8888'}/${userLanguage}/home/`;
+  showDesktop = async () => {
+    if (desktopWindow && !desktopWindow.isDestroyed()) {
+      desktopWindow.show();
+      desktopWindow.focus();
+      return;
+    }
+    if (process.platform === 'darwin') app.dock?.show();
+    desktopWindow = createWindow('main', {
+      width: 1280,
+      height: 900,
+      minWidth: 1024,
+      minHeight: 700,
+      icon: resolveAppIcon(),
+      ...getHiddenNativeTitleBarOptions(),
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        // 本地媒体经 media:// 协议加载；紧急回退 SMARTSUB_LEGACY_WEB_SECURITY=true
+        webSecurity: !useLegacyWebSecurity,
+      },
+    });
 
-  mainWindow.webContents.on('will-navigate', (e) => {
-    e.preventDefault();
-  });
+    desktopWindow.webContents.on('will-navigate', (e) => {
+      e.preventDefault();
+    });
 
-  // 关窗行为（macOS 智能模式 / Win·Linux 防误杀）+ Dock 激活恢复
-  setupWindowCloseBehavior(mainWindow);
-  setupWindowChromeHandlers(mainWindow);
+    // 关窗行为（macOS 智能模式 / Win·Linux 防误杀）+ Dock 激活恢复
+    setupWindowCloseBehavior(desktopWindow);
+    setupWindowChromeHandlers(desktopWindow);
+    setupAppMenu(desktopWindow);
+    if (!updaterRegistered) {
+      setupAutoUpdater(mainWindow);
+      updaterRegistered = true;
+    }
+    await desktopWindow.loadURL(rendererUrl);
+    if (!isProd) desktopWindow.webContents.openDevTools();
+  };
 
-  if (isProd) {
-    await mainWindow.loadURL(`app://./${userLanguage}/home/`);
-  } else {
-    const port = process.argv[2];
-    await mainWindow.loadURL(`http://localhost:${port}/${userLanguage}/home/`);
-    mainWindow.webContents.openDevTools();
-  }
-
-  setupAppMenu(mainWindow);
+  // Register every renderer dependency before the first page can invoke IPC.
   setupIpcHandlers(mainWindow);
   setupNetworkHandlers();
   setupTaskProcessor(mainWindow);
   setupSystemInfoManager(mainWindow);
   initializeWorkItemStore();
-  setupWorkItemStoreLifecycle();
   setupWorkItemHandlers();
   setupRecipeHandlers();
   setupGlossaryHandlers(mainWindow);
+  setupDiagnosticsHandlers(mainWindow);
   setupTaskManager();
-  setupAutoUpdater(mainWindow);
-  setupSubtitleMergeHandlers(mainWindow);
+  setupSubtitleMergeHandlers(mainWindow, rendererUrl);
   setupDubbingHandlers(mainWindow);
   setupPipelineHandlers(mainWindow);
   setupVoiceCloneHandlers(mainWindow);
   setupVideoDownloadHandlers(mainWindow);
+  setupToolboxHandlers(mainWindow);
   setMainWindowForAddon(mainWindow);
   registerEngineIpcHandlers();
   setMainWindowForEngine(mainWindow);
+  const automationService = new AutomationService();
+  setupAssistantHandlers(automationService);
+  setupMcpConfigHandlers();
+  await startAutomationServer(automationService);
+  if (desktopRequested) await showDesktop();
+  app.on('activate', () => {
+    desktopRequested = true;
+    void showDesktop?.();
+  });
   // 清理三层架构改造前遗留的旧 py-engine 目录/状态文件（幂等，失败静默）。
   cleanupLegacyPyEngine();
   // 启动后每日一次的节流静默检查 faster-whisper 运行时更新（非阻塞，失败静默）。
@@ -335,6 +410,6 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   // macOS 惯例：关窗不退出（任务保活），其余平台正常退出
   if (process.platform !== 'darwin') {
-    app.quit();
+    if (!backgroundOnly) app.quit();
   }
 });
