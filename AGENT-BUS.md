@@ -16,7 +16,9 @@
 
 | # | 时间 | 发 → 收 | 类型 | 内容 | 状态 |
 |---|---|---|---|---|---|
-| 13 | 11-18 10:12 | 小智-1 → 全体 | 已发布 | 3.12.4 已出包并升级本机：dist\SmartSub_Windows_3.12.4_x64.exe（155.9MB）；D:\Program Files\SmartSub 提权替换 app.asar（SHA256 9d226d45… 核对一致）并已重启。本版新增：火山/彩云/腾讯翻译君/有道LLM 四个免签免费翻译源 + 上游 v3.12.2 全部功能；版本提交 b1cd5dce 已推双镜像 | 待读 |
+| 15 | 11-18 10:45 | 小智-1 → 全体 | 认领版本 | 认领 3.12.5（= 上游已并 3.12.2 + 3，固化 Edge TTS 403 修复 msedge-tts 2.1.1）；build:local 打包并升级本机，完成后台账登记 | 待读 |
+| 14 | 11-18 10:42 | 小智-1 → 全体 | 完工 | Edge TTS 403 修复（a60aad3f，typecheck/build 过 + 实测合成恢复）：msedge-tts 2.0.6 → 2.1.1（对齐 hedaoDict），纯版本升级 API 无变化；注意：修复已进仓库但本机安装版 3.12.4 是修复前构建的，Edge TTS 要生效需再出 3.12.5 重打包 | 已读 |
+| 13 | 11-18 10:12 | 小智-1 → 全体 | 已发布 | 3.12.4 已出包并升级本机：dist\SmartSub_Windows_3.12.4_x64.exe（155.9MB）；D:\Program Files\SmartSub 提权替换 app.asar（SHA256 9d226d45… 核对一致）并已重启。本版新增：火山/彩云/腾讯翻译君/有道LLM 四个免签免费翻译源 + 上游 v3.12.2 全部功能；版本提交 b1cd5dce 已推双镜像 | 已读 |
 | 12 | 11-18 10:00 | 小智-1 → 全体 | 认领版本 | 认领 3.12.4（= 上游已并 3.12.2 + 2，含今日四个新免费源：火山/彩云/腾讯翻译君/有道LLM）；build:local 打包并升级本机，完成后台账登记 | 已读 |
 | 11 | 11-18 09:55 | 小智-1 → 全体 | 完工 | 有道 AI 翻译 LLM 移植落地（9c412a18，typecheck/i18n/build 全过 + 真译双向验证，意译质量确认）：youdaoLlmFree 免签源（随机设备 imei + 601 自动轮换重试），已注册可选源、不进 autoFree 默认链；Hy-MT2 落地完成：GGUF 已入 Ollama（hy-mt2:latest 1.1GB），SmartSub 真实链路四行全准（ollama.ts + json_schema 解码锁定 + 关回显锚定 + 官方翻译提示词），UI 配置步骤已交合道君 | 已读 |
 | 10 | 11-18 09:00 | 小智-1 → 全体 | 完工 | 三个免签免费翻译源已落地（d4b1751e，typecheck/i18n/build 全过 + 模块级真译六用例全通）：volcengineFree/caiyunFree/tencentFree 并入 autoFree 默认回退链（老用户未自定义链自动迁移）；彩云注意点：iOS 端点仅支持简体目标（zh-Hant 明确报不支持）、trans_type 用短码。提交已推 gitee+origin 双镜像 | 已读 |

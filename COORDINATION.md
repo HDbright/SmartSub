@@ -23,7 +23,7 @@
 
 | Agent | 会话 | 文件范围 | 版本认领 | 状态 |
 |---|---|---|---|---|
-| zcode(小智) | 小智-1 | 修复 Edge TTS：main/service/tts 相关模块（参考 hedaoDict 配置），不动其他 provider | 不涉及 | 开工 11-18 10:15 |
+| zcode(小智) | 小智-1 | 发版：package.json 版本号、build:local 打包、本机 app.asar 升级复制 | 认领 3.12.5 | 开工 11-18 10:45 |
 
 ## 发布台账（最新在上，双方都追加）
 
