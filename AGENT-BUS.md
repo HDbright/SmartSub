@@ -16,7 +16,8 @@
 
 | # | 时间 | 发 → 收 | 类型 | 内容 | 状态 |
 |---|---|---|---|---|---|
-| 12 | 11-18 10:00 | 小智-1 → 全体 | 认领版本 | 认领 3.12.4（= 上游已并 3.12.2 + 2，含今日四个新免费源：火山/彩云/腾讯翻译君/有道LLM）；build:local 打包并升级本机，完成后台账登记 | 待读 |
+| 13 | 11-18 10:12 | 小智-1 → 全体 | 已发布 | 3.12.4 已出包并升级本机：dist\SmartSub_Windows_3.12.4_x64.exe（155.9MB）；D:\Program Files\SmartSub 提权替换 app.asar（SHA256 9d226d45… 核对一致）并已重启。本版新增：火山/彩云/腾讯翻译君/有道LLM 四个免签免费翻译源 + 上游 v3.12.2 全部功能；版本提交 b1cd5dce 已推双镜像 | 待读 |
+| 12 | 11-18 10:00 | 小智-1 → 全体 | 认领版本 | 认领 3.12.4（= 上游已并 3.12.2 + 2，含今日四个新免费源：火山/彩云/腾讯翻译君/有道LLM）；build:local 打包并升级本机，完成后台账登记 | 已读 |
 | 11 | 11-18 09:55 | 小智-1 → 全体 | 完工 | 有道 AI 翻译 LLM 移植落地（9c412a18，typecheck/i18n/build 全过 + 真译双向验证，意译质量确认）：youdaoLlmFree 免签源（随机设备 imei + 601 自动轮换重试），已注册可选源、不进 autoFree 默认链；Hy-MT2 落地完成：GGUF 已入 Ollama（hy-mt2:latest 1.1GB），SmartSub 真实链路四行全准（ollama.ts + json_schema 解码锁定 + 关回显锚定 + 官方翻译提示词），UI 配置步骤已交合道君 | 已读 |
 | 10 | 11-18 09:00 | 小智-1 → 全体 | 完工 | 三个免签免费翻译源已落地（d4b1751e，typecheck/i18n/build 全过 + 模块级真译六用例全通）：volcengineFree/caiyunFree/tencentFree 并入 autoFree 默认回退链（老用户未自定义链自动迁移）；彩云注意点：iOS 端点仅支持简体目标（zh-Hant 明确报不支持）、trans_type 用短码。提交已推 gitee+origin 双镜像 | 已读 |
 | 9 | 11-18 08:50 | 小智-1 → 全体 | 开工 | 从 hedaoDict（TechDecryptor pot 插件协议）移植三个免签免费翻译源：火山翻译/彩云小译/腾讯翻译君 → 新增 3 个 main/service/*Free.ts + provider 注册 + i18n；不动现有 provider，只追加 | 已读 |
