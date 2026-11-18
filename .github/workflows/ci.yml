@@ -55,6 +55,12 @@ jobs:
       - name: Unit tests (GPU enumeration and stdin EPIPE hardening)
         run: yarn test:gpu-enumeration
 
+      - name: Tests (closed stdout and stderr pipes)
+        run: yarn test:stdio
+
+      - name: Tests (verified addon installation and provenance)
+        run: yarn test:addon-installation
+
       - name: Tests (local speech review and warning persistence)
         run: |
           yarn test:speech-review
@@ -108,6 +114,11 @@ jobs:
       # 崩溃诊断的纯逻辑单测；真机上的原生崩溃验证见 crash-diagnostics.yml
       - name: Unit tests (crash diagnostics)
         run: yarn test:crash
+
+      # Windows 安装包签名后要重算 latest.yml 的 sha512（见 release.yml）；
+      # 算错会让所有 Windows 用户的自动更新校验失败，所以单独守住这段逻辑
+      - name: Unit tests (release checksum refresh)
+        run: yarn test:release-checksum
 
       - name: Compile application (renderer + main)
         run: yarn build

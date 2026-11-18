@@ -69,6 +69,7 @@ import HelpHint from '@/components/HelpHint';
 import IconChip from '@/components/IconChip';
 import CustomLanguageManager from '@/components/settings/CustomLanguageManager';
 import McpConnectionCard from '@/components/settings/McpConnectionCard';
+import TaskStorageSettings from '@/components/settings/TaskStorageSettings';
 import { openUrl } from 'lib/utils';
 import packageInfo from '../../../package.json';
 import {
@@ -1074,6 +1075,7 @@ const Settings = () => {
                 )}
               </div>
             </div>
+            <TaskStorageSettings storageRoot={storageRoot} />
           </CardContent>
         </Card>
 
@@ -1263,7 +1265,7 @@ const Settings = () => {
                   </p>
                 )}
 
-                {/* 三档环境预设：VAD 开/关由「字幕效果」档位决定，这里只调灵敏度；与手动微调共存，当前值与某档全等时高亮 */}
+                {/* 三档环境预设：VAD 开/关由「识别策略」档位决定，这里只调灵敏度；与手动微调共存，当前值与某档全等时高亮 */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">
                     {t('vadPresets')}

@@ -9,6 +9,13 @@ import { wrapFileObject, ensureTempDir, getMd5 } from './fileUtils';
 import { CONTENT_TEMPLATES } from '../translate/constants';
 import { renderTemplate, getExtraResourcesPath } from './utils';
 import {
+  assertTaskRunEditable,
+  taskRunService,
+  beginTaskResultWrite,
+} from './taskRuns/access';
+import { digestValue } from './taskRuns/service';
+import { removeChineseSubtitlePunctuation } from './chineseConvert';
+import {
   detectSubtitleFormat,
   detectSubtitleFormatFromContent,
   parseSubtitleEntries,
@@ -25,6 +32,7 @@ import {
 import {
   prefixTextWithSpeakerNames,
   type SpeakerInfo,
+  type ProofreadDataMeta,
 } from '../../types/proofreadData';
 import { subtitleOutputFilesToSave } from '../../types/subtitleOutput';
 import { atomicReplaceTextFile } from './atomicFile';
@@ -183,6 +191,11 @@ async function getMediaFilesFromDirectory(
   return files;
 }
 
+type DeliveryLayout = SubtitleLayoutOptions &
+  Pick<
+    ProofreadDataMeta,
+    'removeSourceChinesePunctuation' | 'removeTargetChinesePunctuation'
+  >;
 function buildSubtitleFileContent(
   filePath: string,
   subtitles: any[],
@@ -190,7 +203,7 @@ function buildSubtitleFileContent(
   speakerOptions?: {
     speakers?: SpeakerInfo[];
     embedSpeakerNames?: boolean;
-    layout?: SubtitleLayoutOptions;
+    layout?: DeliveryLayout;
   },
 ): string {
   const format = detectSubtitleFormat(filePath);
@@ -203,24 +216,30 @@ function buildSubtitleFileContent(
     );
   };
   const buildText = (subtitle): string => {
+    const sourceContent = speakerOptions?.layout?.removeSourceChinesePunctuation
+      ? removeChineseSubtitlePunctuation(subtitle.sourceContent ?? '')
+      : (subtitle.sourceContent ?? '');
+    const targetContent = speakerOptions?.layout?.removeTargetChinesePunctuation
+      ? removeChineseSubtitlePunctuation(subtitle.targetContent ?? '')
+      : (subtitle.targetContent ?? '');
     let text: string;
     if (speakerOptions?.layout?.subtitleLayout === 'two-line') {
       const prefix = withSpeakerPrefix(subtitle, '');
       return layoutSubtitleColumns(
-        subtitle.sourceContent ?? '',
-        subtitle.targetContent ?? '',
+        sourceContent,
+        targetContent,
         contentType,
         speakerOptions.layout,
         prefix ? `${prefix} ` : '',
       );
     } else if (contentType === 'source') {
-      text = subtitle.sourceContent ?? '';
+      text = sourceContent;
     } else {
       const template =
         CONTENT_TEMPLATES[contentType] || CONTENT_TEMPLATES.onlyTranslate;
       text = renderTemplate(template, {
-        sourceContent: subtitle.sourceContent ?? '',
-        targetContent: subtitle.targetContent ?? '',
+        sourceContent,
+        targetContent,
       }).replace(/\n+$/, '');
     }
     return withSpeakerPrefix(subtitle, text);
@@ -269,7 +288,7 @@ async function writeSubtitleFile(
   speakerOptions?: {
     speakers?: SpeakerInfo[];
     embedSpeakerNames?: boolean;
-    layout?: SubtitleLayoutOptions;
+    layout?: DeliveryLayout;
   },
 ): Promise<void> {
   const content = buildSubtitleFileContent(
@@ -551,6 +570,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow) {
     'saveSubtitleFile',
     async (event, { filePath, subtitles, contentType = 'source' }) => {
       try {
+        assertTaskRunEditable({ path: filePath });
         await writeSubtitleFile(filePath, subtitles, contentType);
         return { success: true };
       } catch (error) {
@@ -580,12 +600,15 @@ export function setupIpcHandlers(mainWindow: BrowserWindow) {
         outputs: { filePath?: string; contentType?: string }[];
       },
     ) => {
+      let finishWrite: (() => void) | undefined;
       try {
         if (!proofreadDataFile || !fs.existsSync(proofreadDataFile)) {
           throw new Error(
             `Proofread data file not found: ${proofreadDataFile}`,
           );
         }
+        assertTaskRunEditable({ path: proofreadDataFile });
+        finishWrite = beginTaskResultWrite(proofreadDataFile);
 
         const updated = await updateProofreadDataFromSubtitles(
           proofreadDataFile,
@@ -613,6 +636,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow) {
         ]) {
           const filePath = output?.filePath;
           if (!filePath) continue;
+          assertTaskRunEditable({ path: filePath });
           const key = path.resolve(filePath).toLowerCase();
           if (rendered.has(key)) continue;
           rendered.add(key);
@@ -661,6 +685,24 @@ export function setupIpcHandlers(mainWindow: BrowserWindow) {
             return file;
           });
           if (matched) {
+            const run = taskRunService()?.get(item.id);
+            if (run) {
+              const file = run.files.find(
+                (file) =>
+                  file.projection.proofreadDataFile &&
+                  path.resolve(file.projection.proofreadDataFile) ===
+                    path.resolve(proofreadDataFile),
+              );
+              if (!file) throw new Error('TASK_FILE_NOT_FOUND');
+              taskRunService()!.recordProofreadEdit({
+                projectId: item.id,
+                runId: run.runId,
+                fileId: file.fileId,
+                digest: digestValue(updated),
+                translationFailures,
+              });
+              break;
+            }
             saveWorkItem(
               { ...item, pipelineFiles, updatedAt: Date.now() },
               { durable: true },
@@ -675,6 +717,8 @@ export function setupIpcHandlers(mainWindow: BrowserWindow) {
         return {
           error: `保存校对中间态错误: ${error.message}`,
         };
+      } finally {
+        finishWrite?.();
       }
     },
   );

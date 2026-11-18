@@ -78,8 +78,9 @@ import {
 import { useNavigationGuard } from '@/context/NavigationGuardContext';
 import TaskControls from '@/components/TaskControls';
 import InlineConfigBar from '@/components/tasks/InlineConfigBar';
-import SnapshotConfigBar from '@/components/tasks/SnapshotConfigBar';
-import AdvancedSheet from '@/components/tasks/AdvancedSheet';
+import TaskConfigSections from '@/components/tasks/TaskConfigSections';
+import TaskSettingsSheet from '@/components/tasks/TaskSettingsSheet';
+import type { TaskSettingsTab } from '@/components/tasks/settings/types';
 import TaskLoadStatus from '@/components/tasks/TaskLoadStatus';
 import TaskRowList from '@/components/tasks/TaskRowList';
 import TaskGridList from '@/components/tasks/TaskGridList';
@@ -101,8 +102,13 @@ import {
 import { validateTaskConfigReady } from 'lib/taskReadiness';
 import { isTaskRouteHydrated, taskRouteKey } from 'lib/taskRoute';
 import { getProofreadSourcePath } from '../../../../types/subtitleOutput';
+import { correctedSourceSrtSaveOption } from '../../../../types/sourceSrtSave';
 import { useTranslation } from 'next-i18next';
 import { toast } from 'sonner';
+import { useTaskRuns } from 'hooks/useTaskRuns';
+import { editableRunState, taskDraftInput } from 'lib/taskRunDraft';
+import isEqual from 'lodash/isEqual';
+import { isRunLocked } from '../../../../types/taskRun';
 
 export default function TaskPage() {
   const router = useRouter();
@@ -115,12 +121,40 @@ export default function TaskPage() {
   const { t: tHome } = useTranslation('home');
   const confirmOrUndo = useConfirmOrUndo();
   const [files, setFiles] = useState([]);
+  const taskListViewportRef = useRef<HTMLDivElement>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const { currentRun } = useTaskRuns(projectId);
+  const [editableRunId, setEditableRunId] = useState<string | null>(null);
+  const [expectedRunId, setExpectedRunId] = useState<string | null>(null);
+  const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
+  const [draftRevision, setDraftRevision] = useState(0);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [taskStatus, setTaskStatus] = useState('idle');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const processingLocked =
+    isRunLocked(currentRun) ||
+    [
+      'preparing',
+      'queued',
+      'running',
+      'pausing',
+      'paused',
+      'cancelling',
+      'review',
+      'waiting_review',
+    ].includes(taskStatus);
+  const configLocked =
+    processingLocked ||
+    Boolean(expectedRunId && !currentRun) ||
+    Boolean(currentRun && editableRunId !== currentRun.runId);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 更多设置停在哪一页：再次打开回到上次停留的页，场景弹层的「专家设置」直达专家页 */
+  const [settingsTab, setSettingsTab] = useState<TaskSettingsTab>('common');
+  const openSettings = (tab?: TaskSettingsTab) => {
+    if (tab) setSettingsTab(tab);
+    setSettingsOpen(true);
+  };
   const [refinePopoverOpen, setRefinePopoverOpen] = useState(false);
   const [summaryPopoverOpen, setSummaryPopoverOpen] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -140,11 +174,32 @@ export default function TaskPage() {
     formData,
     loaded: configLoaded,
     hydrateSnapshot,
+    correctValue,
+    flushDefaults,
   } = useUnifiedTaskConfig({
     autoLoad: false,
+    // 用户在任务页调整的参数实时记为新任务默认值；固定快照页只读，不记。
+    syncDefaults: !configLocked && !draftLoadError,
   });
   /** 列表/横幅的有效配置：固定任务用快照，否则使用当前表单。 */
   const listFormData = configSnapshot ?? formData;
+  const resultTypeDef =
+    TASK_TYPES.find((def) => def.taskType === configSnapshot?.taskType) ||
+    typeDef;
+  const runConfigChanged = Boolean(
+    currentRun &&
+      !isEqual(
+        buildTaskSnapshotFromConfig(formData),
+        buildTaskSnapshotFromConfig(currentRun.config),
+      ),
+  );
+  const runInputsChanged = Boolean(
+    currentRun &&
+      !isEqual(
+        files.map((file) => taskDraftInput(file, currentRun)),
+        currentRun.files.map((file) => taskDraftInput(file.input)),
+      ),
+  );
   /** 来自加载（而非用户/任务事件）的 files 引用，避免回写存储 */
   const loadedFilesRef = useRef<any[] | null>(null);
   const projectIdRef = useRef<string | null>(null);
@@ -207,22 +262,54 @@ export default function TaskPage() {
       isTaskRouteHydrated({ hydratedRoute, slug, queryProject, projectId }) &&
       configLoaded,
   );
+  const runLocked = isRunLocked(currentRun);
+  useEffect(() => {
+    if (!currentRun || !projectReady) return;
+    let disposed = false;
+    setConfigSnapshot(currentRun.config);
+    setTaskStatus(currentRun.status);
+    setDraftLoadError(null);
+    if (runLocked) {
+      setEditableRunId(null);
+      hydrateSnapshot(currentRun.config);
+      setSettingsOpen(false);
+      setRefinePopoverOpen(false);
+      setSummaryPopoverOpen(false);
+    } else {
+      void window.ipc
+        .invoke('taskRuns:getDraft', currentRun.projectId)
+        .then((draft) => {
+          if (disposed) return;
+          const next = editableRunState(currentRun, draft);
+          setDraftRevision(next.draftRevision);
+          hydrateSnapshot(next.config);
+          setFiles(next.files);
+          setEditableRunId(currentRun.runId);
+        })
+        .catch((error) => {
+          if (!disposed) setDraftLoadError(String(error));
+        });
+    }
+    return () => {
+      disposed = true;
+    };
+  }, [currentRun?.runId, runLocked, projectReady, loadAttempt, slug]);
+
   const projectPayload: TaskProjectSave | null =
-    projectReady && typeDef
+    projectReady && typeDef && !configLocked && !draftLoadError
       ? {
           id: projectId!,
+          ...(currentRun ? { runId: currentRun.runId, draftRevision } : {}),
           taskType: typeDef.taskType,
-          files,
-          ...(configSnapshot
-            ? {}
-            : {
-                taskDraft: {
-                  config: buildTaskSnapshotFromConfig(formData, {
-                    taskType: typeDef.taskType,
-                  }),
-                  manuscripts: manuscriptPool,
-                },
-              }),
+          files: currentRun
+            ? files.map((file) => taskDraftInput(file, currentRun))
+            : files,
+          taskDraft: {
+            config: buildTaskSnapshotFromConfig(formData, {
+              taskType: typeDef.taskType,
+            }),
+            manuscripts: manuscriptPool,
+          },
           preserveTaskProgress: true,
         }
       : null;
@@ -236,7 +323,7 @@ export default function TaskPage() {
       ? projectPayload
       : null,
     (saved) => {
-      setProjectName(saved.name || null);
+      if (saved.name) setProjectName(saved.name);
     },
   );
   useNavigationGuard('task-project-save', {
@@ -406,6 +493,7 @@ export default function TaskPage() {
   // 统一导入入口：支持文件选择对话框（file-selected）与外部事件传入
   const appendFiles = useCallback(
     (incoming: IFiles[]) => {
+      if (configLocked) return;
       if (!incoming?.length) return;
 
       // 若当前任务为需要模型的媒体转写类任务，支持自动分离媒体与参考文稿并进行同名配对
@@ -436,13 +524,20 @@ export default function TaskPage() {
         toast.info(t('skippedDuplicates', { count: skipped }));
       }
     },
-    [files, typeDef?.needsModel, handleIncomingMediaAndManuscripts, t],
+    [
+      files,
+      typeDef?.needsModel,
+      handleIncomingMediaAndManuscripts,
+      t,
+      configLocked,
+    ],
   );
 
   const { hydrateFiles } = useIpcCommunication(
     setFiles,
     appendFiles,
     typeof router.query.project === 'string' ? router.query.project : projectId,
+    currentRun && !configLocked ? currentRun.runId : undefined,
   );
 
   useEffect(() => {
@@ -491,8 +586,14 @@ export default function TaskPage() {
       let name: string | null = null;
       let snapshot: any = null;
       let rawSnap: any = null;
+      let nextExpectedRunId: string | null = null;
       let savedManuscripts: IFiles[] | undefined;
       const id = q || uuidv4();
+      if (!q) {
+        setExpectedRunId(null);
+        setEditableRunId(null);
+        setTaskStatus('idle');
+      }
       if (q) {
         const project = await window?.ipc?.invoke('getTaskProject', q);
         if (project) {
@@ -502,17 +603,41 @@ export default function TaskPage() {
         // 附加阶段、参考文稿及角色分离是任务级输入：创建后固定快照。
         const workItem = await window?.ipc?.invoke('getWorkItem', q);
         if (!workItem) throw new Error('TASK_PROJECT_NOT_FOUND');
+        nextExpectedRunId = workItem.currentRunId || null;
         rawSnap = workItem.configSnapshot;
-        if (isPinnedTaskConfigSnapshot(rawSnap)) snapshot = rawSnap;
+        if (
+          workItem.currentRunId &&
+          ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(
+            workItem.runStatus,
+          )
+        ) {
+          const draft = await window.ipc.invoke('taskRuns:getDraft', q);
+          if (cancelled) return;
+          const draftType =
+            draft?.basedOnRunId === workItem.currentRunId &&
+            TASK_TYPES.find((def) => def.taskType === draft.config.taskType);
+          if (draftType && draftType.slug !== slug) {
+            await router.replace(
+              `/${locale}/tasks/${draftType.slug}?project=${encodeURIComponent(q)}`,
+            );
+            return;
+          }
+        }
+        if (workItem.currentRunId || isPinnedTaskConfigSnapshot(rawSnap))
+          snapshot = rawSnap;
         if (!snapshot && workItem.taskDraft) {
           rawSnap = workItem.taskDraft.config;
           savedManuscripts = workItem.taskDraft.manuscripts;
         }
       }
-      if (!rawSnap)
+      if (!rawSnap) {
+        // 刚在上一个任务里改完参数就新建任务：先把还在防抖中的改动写进默认值，再读取。
+        await flushDefaults();
         rawSnap = newTaskDefaults(await readTaskDefaults(), typeDef.taskType);
+      }
       assertTaskConfig(rawSnap);
       if (cancelled) return;
+      setExpectedRunId(nextExpectedRunId);
       projectIdRef.current = id;
       loadedSlugRef.current = slug;
       // 经 hydrateFiles 合并装载窗口内暂存的任务事件（向导起跑后立刻跳转时，
@@ -593,7 +718,8 @@ export default function TaskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady, router.query.autostart]);
 
-  // 进入任务页 = 选择任务类型：同步到持久化配置
+  // 进入任务页 = 选择任务类型：表单里的 taskType 跟随页面（它属于单个任务，
+  // 不会被记为新任务默认值，新任务的类型由所进入的页面决定）。
   useEffect(() => {
     if (!typeDef || !projectReady || configSnapshot) return;
     if (
@@ -642,12 +768,13 @@ export default function TaskPage() {
       providers as any[],
       current,
     );
-    form.setValue('translateProvider', defaultId);
+    // 自动纠正不是用户的选择：只改表单，不记为新任务默认值。
+    correctValue('translateProvider', defaultId);
   }, [
     typeDef,
     providers,
     formData?.translateProvider,
-    form,
+    correctValue,
     projectReady,
     configSnapshot,
   ]);
@@ -683,9 +810,10 @@ export default function TaskPage() {
         : (lastUsedTranscription ?? undefined),
     );
     if (next) {
-      form.setValue('transcriptionEngine', next.engine);
-      form.setValue('model', next.model);
-      form.setValue('asrProviderId', next.asrProviderId ?? '');
+      // 自动回填不是用户的选择：只改表单，不记为新任务默认值。
+      correctValue('transcriptionEngine', next.engine);
+      correctValue('model', next.model);
+      correctValue('asrProviderId', next.asrProviderId ?? '');
     }
   }, [
     typeDef,
@@ -698,25 +826,28 @@ export default function TaskPage() {
     formData?.transcriptionEngine,
     formData?.model,
     formData?.asrProviderId,
-    form,
+    correctValue,
     projectReady,
     configSnapshot,
   ]);
 
-  // 「仅生成字幕」任务的源字幕就是最终交付物，不能用 noSave（任务结束会被清理删除）。
-  // 修正默认/历史残留的 noSave 或空值，避免视频目录最终没有字幕文件，且下拉框不再显示为空。
+  // 「仅生成字幕」任务的源字幕就是最终交付物，不能停在 noSave（否则落盘成 `<视频名>_temp.srt`）。
+  // 修正默认/历史残留的 noSave 或空值，下拉框也不再显示为空。规则与向导、设置面板、下载流水线共用。
   useEffect(() => {
-    if (!projectReady || configSnapshot || typeDef?.taskType !== 'generateOnly')
-      return;
+    if (!projectReady || configSnapshot) return;
     if (!formData || Object.keys(formData).length === 0) return;
-    const opt = formData.sourceSrtSaveOption;
-    if (!opt || opt === 'noSave') {
-      form.setValue('sourceSrtSaveOption', 'fileName');
+    const corrected = correctedSourceSrtSaveOption(
+      typeDef?.taskType,
+      formData.sourceSrtSaveOption,
+    );
+    if (corrected) {
+      // 只对本页生效的修正：不能把 'fileName' 记进翻译类任务的默认值。
+      correctValue('sourceSrtSaveOption', corrected);
     }
   }, [
     typeDef,
     formData?.sourceSrtSaveOption,
-    form,
+    correctValue,
     projectReady,
     configSnapshot,
   ]);
@@ -731,9 +862,7 @@ export default function TaskPage() {
   }, []);
 
   const handleTaskDispatched = useCallback((effectiveFormData: any) => {
-    if (isPinnedTaskConfigSnapshot(effectiveFormData)) {
-      setConfigSnapshot({ ...effectiveFormData });
-    }
+    setConfigSnapshot({ ...effectiveFormData });
   }, []);
 
   const handleViewModeChange = useCallback((mode: 'list' | 'grid') => {
@@ -744,8 +873,22 @@ export default function TaskPage() {
   const retrySubmission = useTaskSubmission();
   const handleRetryFiles = useCallback(
     async (retryFiles: any[]) => {
-      if (retrySubmission.starting) return;
+      if (retrySubmission.starting || configLocked || draftLoadError) return;
       try {
+        if (
+          currentRun &&
+          !runConfigChanged &&
+          !runInputsChanged &&
+          ['failed', 'interrupted'].includes(currentRun.status)
+        ) {
+          await window.ipc.invoke('taskRuns:command', {
+            projectId,
+            expectedRunId: currentRun.runId,
+            requestId: uuidv4(),
+            command: 'retry',
+          });
+          return;
+        }
         if (
           typeDef?.accepts === 'subtitle' &&
           retryFiles.some(
@@ -755,13 +898,21 @@ export default function TaskPage() {
           toast.error(t('subtitleFilesRequired'));
           return;
         }
-        const snapshot = buildTaskSnapshotFromConfig(listFormData);
-        const outcome = await retrySubmission.submit({
-          projectId,
-          files: retryFiles,
-          typeDef,
-          formData: { ...snapshot, taskType: typeDef.taskType },
-        });
+        const snapshot = buildTaskSnapshotFromConfig(
+          currentRun ? formData : listFormData,
+        );
+        // A retry reproduces the configuration the task already ran with, so it never
+        // asks again whether to use the embedded subtitles.
+        const outcome = await retrySubmission.submit(
+          {
+            projectId,
+            files: currentRun ? files : retryFiles,
+            resumeLegacy: !currentRun,
+            typeDef,
+            formData: { ...snapshot, taskType: typeDef.taskType },
+          },
+          { promptEmbeddedSubtitles: false },
+        );
         if (outcome.status === 'invalid') {
           toast.error(t(`readiness.${outcome.readiness.errors[0]}`));
           return;
@@ -773,7 +924,20 @@ export default function TaskPage() {
         toast.error(error instanceof Error ? error.message : String(error));
       }
     },
-    [listFormData, projectId, typeDef, retrySubmission, t],
+    [
+      listFormData,
+      formData,
+      runConfigChanged,
+      runInputsChanged,
+      projectId,
+      typeDef,
+      retrySubmission,
+      configLocked,
+      draftLoadError,
+      t,
+      currentRun,
+      files,
+    ],
   );
 
   const handleRetry = useCallback(
@@ -799,6 +963,9 @@ export default function TaskPage() {
   const gateReleaseToken = useRef<object>();
   const [gateReleaseError, setGateReleaseError] = useState<string | null>(null);
   const [gateReleasing, setGateReleasing] = useState(false);
+  const beforeReviewRelease = useRef<(() => Promise<boolean>) | null>(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const reviewSavingRef = useRef(false);
   const lastGateRelease = useRef<{
     gate: 'subtitle' | 'dubbing';
     fileUuids?: string[];
@@ -822,6 +989,13 @@ export default function TaskPage() {
       setGateReleasing(true);
       setGateReleaseError(null);
       try {
+        if (
+          gate === 'subtitle' &&
+          proofreadFile &&
+          (!fileUuids || fileUuids.includes(proofreadFile.uuid))
+        ) {
+          if (!(await beforeReviewRelease.current?.())) return false;
+        }
         await releasePipelineGate(
           {
             projectId,
@@ -856,7 +1030,7 @@ export default function TaskPage() {
         }
       }
     },
-    [projectId],
+    [projectId, proofreadFile],
   );
 
   const gateReleaseBanner = gateReleaseError && (
@@ -909,15 +1083,25 @@ export default function TaskPage() {
   );
 
   const handleReleaseAndNext = useCallback(async () => {
-    if (!proofreadFile) return;
-    if (!(await handleReleaseGate('subtitle', [proofreadFile.uuid]))) return;
-    const next = subtitleReviewQueue.find((f) => f.uuid !== proofreadFile.uuid);
-    setProofreadFile(next ?? null);
+    if (!proofreadFile || reviewSavingRef.current) return;
+    reviewSavingRef.current = true;
+    setReviewSaving(true);
+    try {
+      if (!(await handleReleaseGate('subtitle', [proofreadFile.uuid]))) return;
+      const next = subtitleReviewQueue.find(
+        (f) => f.uuid !== proofreadFile.uuid,
+      );
+      setProofreadFile(next ?? null);
+    } finally {
+      reviewSavingRef.current = false;
+      setReviewSaving(false);
+    }
   }, [proofreadFile, subtitleReviewQueue, handleReleaseGate]);
 
   const handleRetryFailed = handleRetryFiles;
 
   const handleImport = useCallback(() => {
+    if (configLocked) return;
     const fileType =
       typeDef?.accepts === 'subtitle'
         ? 'srt'
@@ -925,7 +1109,7 @@ export default function TaskPage() {
           ? 'media-and-manuscript'
           : 'media';
     window?.ipc?.send('openDialog', { dialogType: 'openDialog', fileType });
-  }, [typeDef]);
+  }, [typeDef, configLocked]);
 
   // Cmd/Ctrl+O 导入文件（任务页范围）
   useHotkeys([
@@ -934,6 +1118,7 @@ export default function TaskPage() {
 
   // 任务运行/取消中禁止破坏性列表操作（删行/清空），避免主进程仍处理已移除文件
   const queueBusy =
+    configLocked ||
     taskStatus === 'running' ||
     taskStatus === 'paused' ||
     taskStatus === 'cancelling';
@@ -972,15 +1157,18 @@ export default function TaskPage() {
 
   const handleProofread = useCallback(
     (file: IFiles) => {
-      if (!typeDef) return;
-      const unavailableReason = getProofreadUnavailableReason(file, typeDef);
+      if (!resultTypeDef) return;
+      const unavailableReason = getProofreadUnavailableReason(
+        file,
+        resultTypeDef,
+      );
       if (unavailableReason === 'txt') {
         toast.info(t('row.proofreadTxtUnsupported'));
         return;
       }
       setProofreadFile(file);
     },
-    [t, typeDef],
+    [t, resultTypeDef],
   );
 
   const startRename = () => {
@@ -1048,18 +1236,35 @@ export default function TaskPage() {
         } else {
           if (projectId) {
             try {
-              const saved = await window?.ipc?.invoke('saveTaskProject', {
-                id: projectId,
-                taskType: targetTypeDef.taskType,
-                files,
-                taskDraft: {
+              let saved;
+              if (currentRun) {
+                const previous = await window.ipc.invoke(
+                  'taskRuns:getDraft',
+                  projectId,
+                );
+                saved = await window.ipc.invoke('taskRuns:saveDraft', {
+                  projectId,
+                  expectedDraftRevision: previous?.revision || 0,
                   config: buildTaskSnapshotFromConfig(form.getValues(), {
                     taskType: targetTypeDef.taskType,
                   }),
-                  manuscripts: manuscriptPool,
-                },
-                preserveTaskProgress: true,
-              });
+                  files: files.map((file) => taskDraftInput(file, currentRun)),
+                });
+                setEditableRunId(null);
+              } else {
+                saved = await window?.ipc?.invoke('saveTaskProject', {
+                  id: projectId,
+                  taskType: targetTypeDef.taskType,
+                  files,
+                  taskDraft: {
+                    config: buildTaskSnapshotFromConfig(form.getValues(), {
+                      taskType: targetTypeDef.taskType,
+                    }),
+                    manuscripts: manuscriptPool,
+                  },
+                  preserveTaskProgress: true,
+                });
+              }
               if (!saved) {
                 toast.error(t('modeSwitch.saveFailed'));
                 return;
@@ -1089,6 +1294,7 @@ export default function TaskPage() {
       t,
       persistence.save,
       manuscriptPool,
+      currentRun,
     ],
   );
 
@@ -1141,6 +1347,7 @@ export default function TaskPage() {
 
   const handleAssignManuscript = useCallback(
     (targetFile: IFiles, manuscriptPath: string, manuscriptName?: string) => {
+      if (configLocked) return;
       if (manuscriptPath && manuscriptPath !== '__none__') {
         const name =
           manuscriptName ||
@@ -1188,13 +1395,13 @@ export default function TaskPage() {
         }),
       );
     },
-    [],
+    [configLocked],
   );
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (!typeDef) return;
+    if (!typeDef || configLocked) return;
 
     const paths: string[] = [];
     const droppedFiles = e.dataTransfer.files;
@@ -1238,7 +1445,7 @@ export default function TaskPage() {
   const pendingFileForProofread = useMemo(() => {
     if (!proofreadFile || !typeDef) return null;
 
-    const isGenerateOnly = typeDef.taskType === 'generateOnly';
+    const isGenerateOnly = listFormData.taskType === 'generateOnly';
 
     const videoPath = isSubtitleFile(proofreadFile.filePath)
       ? undefined
@@ -1332,10 +1539,9 @@ export default function TaskPage() {
 
   // 向导任务标题：来自已存配方的任务显示配方名，否则按快照的实际流程
   // （配音/成片）命名，而非固定的字幕段类型
-  const pipelineTitleKey = getPipelineTitleKey(configSnapshot, typeDef.accepts);
+  const pipelineTitleKey = getPipelineTitleKey(formData, typeDef.accepts);
   const pageTitle =
-    configSnapshot?.recipeName ||
-    t(`pageTitle.${pipelineTitleKey ?? typeDef.slug}`);
+    formData?.recipeName || t(`pageTitle.${pipelineTitleKey ?? typeDef.slug}`);
 
   if (proofreadFile && pendingFileForProofread) {
     // 检查员包壳：停靠在字幕校对点的文件叠加「放行并继续」动线（流式审片）
@@ -1362,7 +1568,7 @@ export default function TaskPage() {
             <Button
               size="sm"
               className="h-7 gap-1 text-xs"
-              disabled={gateReleasing}
+              disabled={gateReleasing || reviewSaving}
               onClick={handleReleaseAndNext}
             >
               <Play className="h-3 w-3" />
@@ -1372,8 +1578,14 @@ export default function TaskPage() {
             </Button>
           </div>
         )}
-        <div className="min-h-0 flex-1">
+        <div
+          className="min-h-0 flex-1"
+          ref={(node) => {
+            if (node) node.inert = reviewSaving || gateReleasing;
+          }}
+        >
           <ProofreadEditor
+            beforeReleaseRef={beforeReviewRelease}
             projectId={projectId || undefined}
             file={pendingFileForProofread}
             onMarkComplete={() => setProofreadFile(null)}
@@ -1428,10 +1640,11 @@ export default function TaskPage() {
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          {configSnapshot ? (
+          {pipelineTitleKey ? (
             <h1
-              className="shrink-0 truncate text-lg font-semibold"
+              className="min-w-0 shrink truncate text-base font-semibold"
               title={pageTitle}
+              data-testid="task-pipeline-title"
             >
               {pageTitle}
             </h1>
@@ -1520,6 +1733,7 @@ export default function TaskPage() {
             size="sm"
             className="h-8 text-xs gap-1.5"
             onClick={handleImport}
+            disabled={configLocked}
           >
             <Import className="h-3.5 w-3.5" />
             {t('import')}
@@ -1554,71 +1768,75 @@ export default function TaskPage() {
             <Trash2 className="h-3.5 w-3.5" />
             {t('clearList')}
           </Button>
-          {!configSnapshot &&
-            (() => {
-              const hasActiveManuscript = Boolean(
-                formData?.manuscriptPath &&
-                  formData.manuscriptPath !== '__none__',
-              );
-              return (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="relative h-8 text-xs gap-1.5"
-                  onClick={() => setAdvancedOpen(true)}
-                  title={
-                    hasActiveManuscript
-                      ? `${t('advanced')} (${t('manuscript.label')})`
-                      : t('advanced')
-                  }
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5" />
-                  {t('advanced')}
-                  {hasActiveManuscript && (
-                    <span
-                      className="absolute -top-1 -right-1 flex h-2 w-2 rounded-full bg-primary"
-                      aria-hidden="true"
-                    />
-                  )}
-                </Button>
-              );
-            })()}
+          {(() => {
+            const hasActiveManuscript = Boolean(
+              formData?.manuscriptPath &&
+                formData.manuscriptPath !== '__none__',
+            );
+            return (
+              <Button
+                variant="outline"
+                size="sm"
+                className="relative h-8 text-xs gap-1.5"
+                onClick={() => openSettings()}
+                disabled={configLocked}
+                title={
+                  hasActiveManuscript
+                    ? `${t('settings.title')} (${t('manuscript.label')})`
+                    : t('settings.title')
+                }
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                {t('settings.title')}
+                {hasActiveManuscript && (
+                  <span
+                    className="absolute -top-1 -right-1 flex h-2 w-2 rounded-full bg-primary"
+                    aria-hidden="true"
+                  />
+                )}
+              </Button>
+            );
+          })()}
         </div>
       </div>
 
       <div className="flex-shrink-0">
         {router.query.project && !projectIdRef.current ? (
           <div className="h-12 w-full animate-pulse rounded-lg border bg-muted/20" />
-        ) : configSnapshot ? (
-          // 固定任务：配置随首次派发快照锁定，只读展示实际生效参数。
-          <SnapshotConfigBar
-            snapshot={configSnapshot}
-            files={files}
-            typeDef={typeDef}
-            providers={providers}
-            asrProviders={asrProviders as any}
-          />
         ) : (
-          <InlineConfigBar
+          <TaskConfigSections
+            key={projectId}
             form={form}
             formData={formData}
-            systemInfo={systemInfo}
-            providers={providers}
-            asrProviders={asrProviders as any}
-            typeDef={typeDef}
-            useLocalWhisper={useLocalWhisper}
-            refineOpen={refinePopoverOpen}
-            onRefineOpenChange={setRefinePopoverOpen}
-            summaryOpen={summaryPopoverOpen}
-            onSummaryOpenChange={setSummaryPopoverOpen}
-            onOpenAdvanced={() => setAdvancedOpen(true)}
-          />
+            disabled={configLocked}
+            composePreferences={
+              configLocked
+                ? currentRun?.resolvedConfig.mergePreferences
+                : undefined
+            }
+          >
+            <InlineConfigBar
+              disabled={configLocked}
+              form={form}
+              formData={formData}
+              systemInfo={systemInfo}
+              providers={providers}
+              asrProviders={asrProviders as any}
+              typeDef={typeDef}
+              useLocalWhisper={useLocalWhisper}
+              refineOpen={refinePopoverOpen}
+              onRefineOpenChange={setRefinePopoverOpen}
+              summaryOpen={summaryPopoverOpen}
+              onSummaryOpenChange={setSummaryPopoverOpen}
+              onOpenSettings={openSettings}
+            />
+          </TaskConfigSections>
         )}
       </div>
 
       <CompletionBanner
         files={files}
-        typeDef={typeDef}
+        typeDef={resultTypeDef!}
         formData={listFormData}
         taskStatus={taskStatus}
         dismissed={bannerDismissed}
@@ -1626,6 +1844,7 @@ export default function TaskPage() {
         onDismiss={() => setBannerDismissed(true)}
         onProofread={handleProofread}
         onRetryFailed={handleRetryFailed}
+        retryDisabled={configLocked || Boolean(draftLoadError)}
       />
 
       {/* 人工检查点聚合操作条：有停靠文件时常驻 */}
@@ -1715,11 +1934,15 @@ export default function TaskPage() {
             isDragging && 'opacity-100',
           )}
         />
-        <ScrollArea className="flex-1 min-h-0">
+        <ScrollArea
+          className="flex-1 min-h-0"
+          viewportRef={taskListViewportRef}
+        >
           {viewMode === 'grid' ? (
             <TaskGridList
+              inputsLocked={configLocked}
               files={files}
-              typeDef={typeDef}
+              typeDef={resultTypeDef!}
               formData={listFormData}
               taskStatus={taskStatus}
               manuscriptPool={manuscriptPool}
@@ -1735,8 +1958,10 @@ export default function TaskPage() {
             />
           ) : (
             <TaskRowList
+              scrollElementRef={taskListViewportRef}
+              inputsLocked={configLocked}
               files={files}
-              typeDef={typeDef}
+              typeDef={resultTypeDef!}
               formData={listFormData}
               taskStatus={taskStatus}
               manuscriptPool={manuscriptPool}
@@ -1792,16 +2017,30 @@ export default function TaskPage() {
           )}
         <div className="mt-3 flex items-center justify-between flex-shrink-0">
           <span className="text-xs text-muted-foreground">
-            {files.length > 0 ? t('taskCount', { count: files.length }) : ''}
+            {currentRun
+              ? t(
+                  configLocked
+                    ? 'processing.configLocked'
+                    : 'processing.adjustAndRepeat',
+                )
+              : files.length > 0
+                ? t('taskCount', { count: files.length })
+                : ''}
           </span>
           <TaskControls
+            allowRetry={!runConfigChanged && !runInputsChanged}
             ready={
               projectReady &&
               dependencies.loaded &&
-              (Boolean(configSnapshot) || Boolean(readiness?.valid))
+              !configLocked &&
+              !draftLoadError &&
+              (Boolean(currentRun) ||
+                Boolean(configSnapshot) ||
+                Boolean(readiness?.valid))
             }
             beforeStart={persistence.save}
-            formData={listFormData}
+            promptEmbeddedSubtitles={!currentRun}
+            formData={formData}
             files={files}
             typeDef={typeDef}
             projectId={projectId}
@@ -1817,7 +2056,6 @@ export default function TaskPage() {
             }}
             onStatusChange={handleStatusChange}
             onTaskDispatched={handleTaskDispatched}
-            rememberDefaults={!configSnapshot}
             autoStart={
               autoStartPending &&
               configLoaded &&
@@ -1827,15 +2065,29 @@ export default function TaskPage() {
         </div>
       </div>
 
+      {draftLoadError && (
+        <div role="alert" className="text-sm text-destructive">
+          {draftLoadError}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setLoadAttempt((value) => value + 1)}
+          >
+            {t('projectSave.retry')}
+          </Button>
+        </div>
+      )}
       <LogPanel className="flex-shrink-0" projectId={projectId} />
       {retrySubmission.dialog}
 
-      <AdvancedSheet
-        open={advancedOpen}
-        onOpenChange={setAdvancedOpen}
+      <TaskSettingsSheet
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
         form={form}
         formData={formData}
         typeDef={typeDef}
+        tab={settingsTab}
+        onTabChange={setSettingsTab}
       />
 
       {/* 全部放行二次确认（含文件数） */}
@@ -1926,6 +2178,8 @@ export async function getStaticProps(context) {
       'common',
       'home',
       'tasks',
+      'dubbing',
+      'subtitleMerge',
       'translateControl',
     ]),
   };

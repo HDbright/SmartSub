@@ -18,6 +18,7 @@ import { ensureTempDir } from '../fileUtils';
 import {
   TaskCancelledError,
   getTaskSignal,
+  getTaskContext,
   throwIfTaskCancelled,
 } from '../taskContext';
 import { GroupMutex } from '../engines/transcribeGate';
@@ -89,7 +90,10 @@ async function materializeDubSubtitle(
   formData: IFormData & { translateProvider?: string },
 ): Promise<string> {
   const source = pickDubTextSource(file, formData, (p) => fs.existsSync(p));
-  const outDir = path.join(ensureTempDir(), 'pipeline-dub');
+  const outDir = path.join(
+    getTaskContext()?.fileRunDirectory || ensureTempDir(),
+    'pipeline-dub',
+  );
   fs.mkdirSync(outDir, { recursive: true });
   let content: string;
   if (source.type === 'ready') {
@@ -215,6 +219,7 @@ async function exportDubbedAudioDeliverable(
   ]);
   try {
     await fs.promises.copyFile(trackPath, output.staged);
+    await getTaskContext()?.verifyInput?.();
     const target = await output.publish(signal ?? new AbortController().signal);
     file.dubbedAudioPath = target;
     logMessage(`dubbed audio deliverable: ${target}`, 'info');
@@ -485,6 +490,13 @@ export async function runDubStage(
       throw new Error(
         `配音有 ${result.failedIndexes.length} 行合成失败，可重试（已完成行会跳过）`,
       );
+    }
+
+    // Managed runs commit automatic cue audio before the independently resumable track stage.
+    if ((formData as any).__deferDubTrack === true) {
+      flushDubbingSession(session);
+      emitStatus(event, file, 'done');
+      return;
     }
 
     // Snapshot reviewed audio and display text for the downstream compose job.

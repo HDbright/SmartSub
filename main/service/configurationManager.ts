@@ -7,6 +7,7 @@
 
 import { ipcMain } from 'electron';
 import * as fs from 'fs/promises';
+import { readFileSync, existsSync } from 'node:fs';
 import * as path from 'path';
 import { app } from 'electron';
 import type { CustomParameterConfig } from '../../types/provider';
@@ -40,6 +41,24 @@ export interface ConfigurationValidationOptions {
 }
 
 export class ConfigurationManager {
+  /** Synchronous acceptance snapshot, before queue publication. */
+  getTaskSnapshot(): Record<string, CustomParameterConfig> {
+    if (this.isInitialized)
+      return Object.fromEntries(
+        [...this.configurations].map(([id, entry]) => [
+          id,
+          structuredClone(entry.config),
+        ]),
+      );
+    if (!existsSync(this.configurationsFile)) return {};
+    const data = JSON.parse(readFileSync(this.configurationsFile, 'utf8'));
+    const entries = data.configurations || data;
+    return Object.fromEntries(
+      Object.entries(entries)
+        .filter(([, entry]: any) => entry?.config)
+        .map(([id, entry]: any) => [id, entry.config]),
+    );
+  }
   private readonly configDir: string;
   private readonly configurationsFile: string;
   private readonly backupDir: string;
@@ -1101,7 +1120,19 @@ export class ConfigurationManager {
       if (needsMigration) {
         console.log('Performing configuration migrations...');
 
-        const next = structuredClone(this.configurations);
+        // Migrate a deep copy and swap it in only once it has been persisted.
+        // Copy entry by entry: the production bundle is built with
+        // @babel/plugin-transform-runtime (corejs: 3), where `Map` is core-js-pure's
+        // wrapper class and structuredClone(map) would turn it into a plain `{}`.
+        const next = new Map(
+          Array.from(
+            this.configurations.entries(),
+            ([providerId, stored]): [string, StoredConfiguration] => [
+              providerId,
+              structuredClone(stored),
+            ],
+          ),
+        );
         const result = await migrationManager.migrateConfigurations(next);
 
         if (result.success) {

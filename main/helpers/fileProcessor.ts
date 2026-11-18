@@ -1,3 +1,4 @@
+import { clearInactiveTaskStages } from '../../types/taskStages';
 import { TaskActivityReporter } from './taskActivity';
 import { runWithTaskContext } from './taskContext';
 import path from 'path';
@@ -95,18 +96,12 @@ function onError(event, file, key, error) {
 /**
  * 生成字幕
  */
-async function generateSubtitle(
-  event,
-  file: IFiles,
-  formData,
-  hasOpenAiWhisper,
-) {
+async function generateSubtitle(event, file: IFiles, formData) {
   try {
     return await routeTranscription({
       event,
       file,
       formData,
-      hasOpenAiWhisper,
     });
   } catch (error) {
     if (isTaskCancelledError(error) || isWhisperAbortError(error)) {
@@ -241,7 +236,6 @@ async function processFileImpl(
   event,
   file: IFiles,
   formData,
-  hasOpenAiWhisper,
   provider,
   fallbackProviders = [],
 ) {
@@ -369,6 +363,7 @@ async function processFileImpl(
       delete (file as any)[k];
     }
   }
+  if (!retryExport) clearInactiveTaskStages(file, formData || {});
   file.exportSubtitle = '';
   file.exportSubtitleError = undefined;
   // 摘要阶段不会运行时清掉旧正文、阶段状态和错误码。写成 undefined，
@@ -829,7 +824,7 @@ async function processFileImpl(
           // 生成字幕
           logMessage(`generate subtitle ${file.srtFile}`, 'info');
           throwIfTaskCancelled();
-          await generateSubtitle(event, file, formData, hasOpenAiWhisper);
+          await generateSubtitle(event, file, formData);
 
           // AI 字幕精修（openspec: add-ai-subtitle-refine）：语义断句 + 文本校正，
           // 仅对本轮 ASR 转写产物执行（内封提取/配对/导入字幕不重断句），位于

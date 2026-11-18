@@ -130,7 +130,14 @@ import {
   segmentTiming,
   progressPercent,
 } from '../main/helpers/sherpaOnnx/sherpaConfig';
-import { buildQwenParams } from '../main/helpers/engines/qwenParams';
+import {
+  buildQwenParams,
+  clampQwenMaxSpeech,
+  estimateQwenTokens,
+  findQwenOverBudgetSegments,
+  QWEN_DEFAULT_MAX_SPEECH_S,
+  QWEN_HARD_MAX_SPEECH_S,
+} from '../main/helpers/engines/qwenParams';
 import { sanitizeQwenAsrText } from '../main/helpers/engines/qwenText';
 import {
   buildFireRedParams,
@@ -1411,9 +1418,10 @@ eq(
     vad_threshold: 0.5,
     vad_min_silence_duration_ms: 100,
     vad_min_speech_duration_ms: 250,
-    vad_max_speech_duration_s: 0,
+    // 不再沿用「0 = 不限制」：Qwen 的 token 预算装不下长段（design D2/D3）。
+    vad_max_speech_duration_s: QWEN_DEFAULT_MAX_SPEECH_S,
   },
-  'qwen: default params match sherpa upstream defaults',
+  'qwen: default params match sherpa upstream defaults (max speech capped)',
 );
 eq(
   buildQwenParams({ qwenProvider: 'cuda', qwenNumThreads: 4 }).provider,
@@ -1430,6 +1438,154 @@ eq(
     .max_new_tokens,
   256,
   'qwen: custom max_new_tokens passthrough',
+);
+
+// --- qwenParams: 段长安全闸（design D2/D3）---
+// 默认 15 秒、上限 20 秒；0 / 未设 / 非法 → 默认，绝不把「不限制」传给 VAD。
+eq(QWEN_DEFAULT_MAX_SPEECH_S, 15, 'qwen: default max speech is 15s');
+eq(QWEN_HARD_MAX_SPEECH_S, 20, 'qwen: hard max speech is 20s');
+for (const [raw, label] of [
+  [0, '0 (unlimited convention)'],
+  [undefined, 'undefined'],
+  [null, 'null'],
+  [Number.NaN, 'NaN'],
+  [Number.POSITIVE_INFINITY, 'Infinity'],
+  [-5, 'negative'],
+  ['abc', 'non-numeric string'],
+] as Array<[unknown, string]>) {
+  eq(
+    clampQwenMaxSpeech(raw),
+    QWEN_DEFAULT_MAX_SPEECH_S,
+    `qwen: max speech ${label} -> 15s default (never unlimited)`,
+  );
+}
+eq(clampQwenMaxSpeech(12), 12, 'qwen: in-range max speech passes through');
+eq(
+  clampQwenMaxSpeech(20),
+  20,
+  'qwen: max speech exactly at the 20s hard cap passes through',
+);
+eq(clampQwenMaxSpeech(0.5), 0.5, 'qwen: fractional max speech passes through');
+eq(
+  clampQwenMaxSpeech(25),
+  QWEN_HARD_MAX_SPEECH_S,
+  'qwen: max speech above the cap clamps to 20s',
+);
+eq(
+  clampQwenMaxSpeech(60),
+  QWEN_HARD_MAX_SPEECH_S,
+  'qwen: slider maximum (60s) clamps to 20s',
+);
+eq(
+  buildQwenParams({ vadMaxSpeechDuration: 0 }).vad_max_speech_duration_s,
+  QWEN_DEFAULT_MAX_SPEECH_S,
+  'qwen: buildQwenParams overrides 0=unlimited convention (auto 15s)',
+);
+eq(
+  buildQwenParams({ vadMaxSpeechDuration: 12 }).vad_max_speech_duration_s,
+  12,
+  'qwen: buildQwenParams keeps a valid manual max speech',
+);
+eq(
+  buildQwenParams({ vadMaxSpeechDuration: 60 }).vad_max_speech_duration_s,
+  QWEN_HARD_MAX_SPEECH_S,
+  'qwen: buildQwenParams clamps an oversized max speech to 20s',
+);
+
+// --- qwenParams: 解码预算估算（sherpa-onnx v1.13.2：提示词约 15 + 音频 13/秒 + 生成预留）---
+eq(
+  estimateQwenTokens(28, 128),
+  507,
+  'qwen: a 28s segment needs 507 tokens (fits the default 512)',
+);
+eq(
+  estimateQwenTokens(30, 128),
+  533,
+  'qwen: a 30s segment needs 533 tokens (over the default 512)',
+);
+eq(
+  estimateQwenTokens(28.3, 128),
+  511,
+  'qwen: 28.3s still fits the default 512 budget',
+);
+eq(
+  estimateQwenTokens(28.4, 128),
+  513,
+  'qwen: 28.4s no longer fits the default 512 budget',
+);
+eq(
+  estimateQwenTokens(45, 256),
+  856,
+  'qwen: token estimate follows the configured max_new_tokens',
+);
+
+// --- qwenParams: 超预算 VAD 段查找 ---
+const QWEN_DEFAULT_BUDGET = { max_total_len: 512, max_new_tokens: 128 };
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, undefined),
+  null,
+  'qwen budget: no VAD info -> nothing to report',
+);
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, []),
+  null,
+  'qwen budget: empty VAD list -> nothing to report',
+);
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, [
+    { start: 0, end: 12.5 },
+    { start: 13, end: 41 },
+  ]),
+  null,
+  'qwen budget: segments up to 28s fit (boundary included)',
+);
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, [{ start: 0, end: 30 }]),
+  {
+    count: 1,
+    total: 1,
+    longest: { start: 0, end: 30, tokens: 533 },
+    fitSeconds: 28.3,
+  },
+  'qwen budget: a single 30s segment is reported with its token need',
+);
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, [
+    { start: 0, end: 10 },
+    { start: 10, end: 55 },
+    { start: 60, end: 92 },
+    { start: 100, end: 110 },
+  ]),
+  {
+    count: 2,
+    total: 4,
+    longest: { start: 10, end: 55, tokens: 728 },
+    fitSeconds: 28.3,
+  },
+  'qwen budget: mixed segments report count, total and the longest one',
+);
+eq(
+  findQwenOverBudgetSegments({ max_total_len: 1024, max_new_tokens: 256 }, [
+    { start: 0, end: 45 },
+  ]),
+  null,
+  'qwen budget: a raised budget (1024/256) fits a 45s segment',
+);
+eq(
+  findQwenOverBudgetSegments({ max_total_len: 1024, max_new_tokens: 256 }, [
+    { start: 0, end: 60 },
+  ])?.fitSeconds,
+  57.9,
+  'qwen budget: fitSeconds follows the configured budget',
+);
+eq(
+  findQwenOverBudgetSegments(QWEN_DEFAULT_BUDGET, [
+    { start: 5, end: 5 },
+    { start: Number.NaN, end: 3 },
+    { start: 9, end: 2 },
+  ]),
+  null,
+  'qwen budget: empty, NaN and reversed segments are ignored',
 );
 
 // --- qwenText: protocol cleanup without guessing which words are speech ---
@@ -2041,6 +2197,11 @@ eq(
   'path: whitespace -> fallback',
 );
 
+// CTranslate2 的 load_vocabulary 依次尝试 vocabulary.json、vocabulary.txt，两者都打不开
+// 才抛 "Cannot load the vocabulary from the model directory"。
+const CT2_VOCABULARY_MISSING =
+  'vocabulary.json or vocabulary.txt is missing or empty';
+
 // --- CT2 模型完整性：残缺快照不算已安装，完整快照优先 ---
 {
   const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'ct2-integrity-'));
@@ -2051,6 +2212,7 @@ eq(
   fs.mkdirSync(complete, { recursive: true });
   fs.writeFileSync(nodePath.join(incomplete, 'model.bin'), 'model');
   fs.writeFileSync(nodePath.join(complete, 'model.bin'), 'model');
+  fs.writeFileSync(nodePath.join(complete, 'vocabulary.txt'), 'token\n');
   fs.writeFileSync(
     nodePath.join(complete, 'config.json'),
     JSON.stringify({
@@ -2072,8 +2234,8 @@ eq(
   );
   eq(
     validateCt2ModelSnapshot(incomplete).issues,
-    ['config.json is missing'],
-    'ct2 integrity: missing config is diagnosed',
+    ['config.json is missing', CT2_VOCABULARY_MISSING],
+    'ct2 integrity: missing config and vocabulary are diagnosed together',
   );
   eq(
     inspectCt2SnapshotRoot(snapshots).snapshotDir,
@@ -2096,6 +2258,113 @@ eq(
       'config.json.suppress_ids_begin is missing or invalid',
     ],
     'ct2 integrity: missing native config arrays are diagnosed',
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// --- CT2 词表：只有 model.bin + config.json 的快照不算已安装 ---
+// 下载器按文件名字母序取文件（config.json → model.bin → … → tokenizer.json →
+// vocabulary.*），model.bin 之后失败、取消或退出应用会留下这种半成品；手动导入或
+// 拷贝不全的文件夹同样如此。校验若放行，界面显示已安装、转写才报 CTranslate2 的
+// 词表错误，下载器也会因「已安装」直接返回而无法补文件。
+{
+  const tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'ct2-vocabulary-'));
+  const config = JSON.stringify({
+    lang_ids: [],
+    suppress_ids: [],
+    suppress_ids_begin: [],
+  });
+  const makeSnapshot = (
+    parent: string,
+    name: string,
+    extra: Record<string, string> = {},
+  ): string => {
+    const dir = nodePath.join(parent, name);
+    fs.mkdirSync(dir, { recursive: true });
+    const files = { 'model.bin': 'model', 'config.json': config, ...extra };
+    for (const [file, content] of Object.entries(files)) {
+      fs.writeFileSync(nodePath.join(dir, file), content);
+    }
+    return dir;
+  };
+  const issuesOf = (dir: string) => validateCt2ModelSnapshot(dir).issues;
+
+  eq(
+    issuesOf(makeSnapshot(tmp, 'partial', { 'tokenizer.json': '{}' })),
+    [CT2_VOCABULARY_MISSING],
+    'ct2 vocabulary: model.bin + config.json + tokenizer.json is still incomplete',
+  );
+  eq(
+    issuesOf(makeSnapshot(tmp, 'json', { 'vocabulary.json': '["a"]' })),
+    [],
+    'ct2 vocabulary: vocabulary.json is enough (large-v3, turbo, distil)',
+  );
+  eq(
+    issuesOf(makeSnapshot(tmp, 'txt', { 'vocabulary.txt': 'a\n' })),
+    [],
+    'ct2 vocabulary: vocabulary.txt is enough (tiny, base, small, medium)',
+  );
+  eq(
+    issuesOf(makeSnapshot(tmp, 'empty', { 'vocabulary.json': '' })),
+    [CT2_VOCABULARY_MISSING],
+    'ct2 vocabulary: an empty vocabulary file does not count',
+  );
+  eq(
+    issuesOf(makeSnapshot(tmp, 'misnamed', { 'vocab.txt': 'a\n' })),
+    [CT2_VOCABULARY_MISSING],
+    'ct2 vocabulary: the name must be exactly vocabulary.json or vocabulary.txt',
+  );
+
+  // HuggingFace 缓存里的文件是指向 blobs/ 的软链接：指向真实 blob 的要认；
+  // 缓存被拷走、blobs 丢了留下的悬空链接不能认。无权创建软链接的平台跳过。
+  try {
+    const blobs = nodePath.join(tmp, 'blobs');
+    fs.mkdirSync(blobs, { recursive: true });
+    fs.writeFileSync(nodePath.join(blobs, 'vocabulary-blob'), '["a"]');
+    const linked = makeSnapshot(tmp, 'linked');
+    fs.symlinkSync(
+      nodePath.join(blobs, 'vocabulary-blob'),
+      nodePath.join(linked, 'vocabulary.json'),
+    );
+    const dangling = makeSnapshot(tmp, 'dangling');
+    fs.symlinkSync(
+      nodePath.join(blobs, 'missing-blob'),
+      nodePath.join(dangling, 'vocabulary.json'),
+    );
+    eq(
+      issuesOf(linked),
+      [],
+      'ct2 vocabulary: a symlink to a real blob counts (HuggingFace cache layout)',
+    );
+    eq(
+      issuesOf(dangling),
+      [CT2_VOCABULARY_MISSING],
+      'ct2 vocabulary: a dangling symlink does not count',
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+  }
+
+  // 半成品快照不算已安装；补上缺的文件即修复。
+  const snapshotRoot = nodePath.join(tmp, 'snapshots');
+  const stopped = makeSnapshot(snapshotRoot, 'rev-1', {
+    'tokenizer.json': '{}',
+  });
+  const stoppedInspection = inspectCt2SnapshotRoot(snapshotRoot);
+  eq(
+    [
+      stoppedInspection.snapshotDir,
+      stoppedInspection.incompleteSnapshotDir,
+      stoppedInspection.issues,
+    ],
+    [null, stopped, [CT2_VOCABULARY_MISSING]],
+    'ct2 vocabulary: a download that stopped after model.bin is incomplete, not installed',
+  );
+  fs.writeFileSync(nodePath.join(stopped, 'vocabulary.json'), '["a"]');
+  eq(
+    inspectCt2SnapshotRoot(snapshotRoot).snapshotDir,
+    stopped,
+    'ct2 vocabulary: fetching the missing file repairs the snapshot in place',
   );
   fs.rmSync(tmp, { recursive: true, force: true });
 }
@@ -8133,6 +8402,29 @@ function runWhisperAudioInputTests(): void {
     'needsPcmInput: darwin + CJK',
   );
   eq(needsPcmInput('', 'win32'), false, 'needsPcmInput: empty path');
+  for (const [length, expected] of [
+    [259, false],
+    [260, true],
+    [262, true],
+    [320, true],
+  ] as const) {
+    const file = 'C:\\' + 'a'.repeat(length - 7) + '.wav';
+    eq(
+      needsPcmInput(file, 'win32'),
+      expected,
+      `needsPcmInput: Windows ASCII path of ${length} characters`,
+    );
+    eq(
+      needsPcmInput(file, 'darwin'),
+      false,
+      `needsPcmInput: macOS path of ${length} characters`,
+    );
+    eq(
+      needsPcmInput(file, 'linux'),
+      false,
+      `needsPcmInput: Linux path of ${length} characters`,
+    );
+  }
   eq(
     needsPcmInput(undefined as unknown as string, 'win32'),
     false,
@@ -8271,6 +8563,30 @@ function runWhisperAudioInputTests(): void {
       'adapt: every other parameter is preserved',
     );
     eq(baseParams.fname_inp, mono, 'adapt: the input object is not mutated');
+    const longDirectory = nodePath.join(
+      tmpRoot,
+      'a'.repeat(80),
+      'b'.repeat(80),
+      'c'.repeat(80),
+    );
+    fs.mkdirSync(longDirectory, { recursive: true });
+    const longFile = nodePath.join(longDirectory, 'tempAudioFile.wav');
+    fs.writeFileSync(longFile, wavBytes([0, 16384, -16384]));
+    const longParams = { ...baseParams, fname_inp: longFile };
+    const longAdapted = adaptWhisperAudioInput(longParams, {
+      platform: 'win32',
+    });
+    eq(longAdapted.fname_inp, '', 'adapt: long ASCII path uses PCM input');
+    eq(
+      Array.from((longAdapted.pcmf32 as Float32Array) ?? []),
+      [0, 0.5, -0.5],
+      'adapt: long path preserves audio samples',
+    );
+    eq(
+      longParams.fname_inp,
+      longFile,
+      'adapt: long path input object is not mutated',
+    );
     eq(
       logs.filter((l) => l.level === 'info').length,
       1,

@@ -5,7 +5,6 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -21,6 +20,8 @@ import {
   resolveSubtitleOutputFormats,
   type SubtitleOutputFormat,
 } from '../../../types/subtitleOutput';
+import { normalizeTranslateContent } from '../../../types/translateContent';
+import { translateContentLabelKey } from 'lib/translateContentLabel';
 import type { TaskTypeDef } from 'lib/taskTypes';
 
 interface OutputFormatControlProps {
@@ -28,6 +29,7 @@ interface OutputFormatControlProps {
   formData: any;
   typeDef: TaskTypeDef;
   className?: string;
+  compact?: boolean;
 }
 
 export default function OutputFormatControl({
@@ -35,6 +37,7 @@ export default function OutputFormatControl({
   formData,
   typeDef,
   className,
+  compact = false,
 }: OutputFormatControlProps) {
   const { t } = useTranslation('tasks');
   const { t: tHome } = useTranslation('home');
@@ -57,12 +60,14 @@ export default function OutputFormatControl({
   };
 
   const formatSummary = selectedFormats.map((f) => f.toUpperCase()).join(', ');
-  const contentKey =
-    formData.translateContent === 'onlyTranslate'
-      ? 'outputTranslationOnly'
-      : formData.translateContent === 'translateAndSource'
-        ? 'outputTranslationFirst'
-        : 'outputSourceFirst';
+  // 未保存样式时与主进程一致地视为默认（仅译文），摘要、选择框与示例同源。
+  const translateContent = normalizeTranslateContent(formData.translateContent);
+  const contentKey = translateContentLabelKey(translateContent);
+  const fullSummary = `${typeDef.hasTranslate ? `${tHome(contentKey)} · ` : ''}${formatSummary}`;
+  const summary =
+    compact && typeDef.hasTranslate && translateContent !== 'onlyTranslate'
+      ? `${tHome('outputBilingual')} · ${formatSummary}`
+      : fullSummary;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -72,6 +77,7 @@ export default function OutputFormatControl({
           variant="outline"
           size="sm"
           aria-label={tHome('subtitleOutputFormat')}
+          title={fullSummary}
           className={cn(
             'h-8 w-full min-w-0 text-xs gap-1 px-2.5 font-normal justify-between',
             className,
@@ -79,10 +85,7 @@ export default function OutputFormatControl({
         >
           <div className="flex items-center gap-1.5 min-w-0 truncate">
             <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">
-              {typeDef.hasTranslate ? `${tHome(contentKey)} · ` : ''}
-              {formatSummary}
-            </span>
+            <span className="truncate">{summary}</span>
           </div>
           <ChevronDown className="h-3 w-3 shrink-0 opacity-50 ml-1" />
         </Button>
@@ -123,7 +126,7 @@ export default function OutputFormatControl({
               {t('configBar.style')}
             </label>
             <Select
-              value={formData.translateContent || 'sourceAndTranslate'}
+              value={translateContent}
               onValueChange={(v) =>
                 form.setValue('translateContent', v, { shouldDirty: true })
               }
@@ -148,40 +151,15 @@ export default function OutputFormatControl({
               aria-label={tHome('outputExample')}
             >
               <p className="text-muted-foreground">{tHome('outputExample')}</p>
-              {(formData.translateContent === 'onlyTranslate'
+              {(translateContent === 'onlyTranslate'
                 ? [tHome('outputExampleTarget')]
-                : formData.translateContent === 'translateAndSource'
+                : translateContent === 'translateAndSource'
                   ? [tHome('outputExampleTarget'), tHome('outputExampleSource')]
                   : [tHome('outputExampleSource'), tHome('outputExampleTarget')]
               ).map((line, index) => (
                 <p key={index}>{line}</p>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* 内封软字幕 */}
-        {typeDef.needsModel && (
-          <div className="flex items-center justify-between pt-2 border-t border-border">
-            <div className="space-y-0.5">
-              <span className="text-xs font-medium text-foreground">
-                {t('configBar.embeddedSubtitles')}
-              </span>
-              <p className="text-[10px] text-muted-foreground">
-                {t('configBar.embeddedSubtitlesTip', {
-                  defaultValue: '封装进视频作为独立可切换字幕轨',
-                })}
-              </p>
-            </div>
-            <Switch
-              checked={formData.useEmbeddedSubtitles !== false}
-              onCheckedChange={(checked) =>
-                form.setValue('useEmbeddedSubtitles', checked, {
-                  shouldDirty: true,
-                })
-              }
-              aria-label={t('configBar.embeddedSubtitles')}
-            />
           </div>
         )}
       </PopoverContent>

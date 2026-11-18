@@ -1,8 +1,10 @@
 /**
- * 字幕效果意图档位（outcome presets）。
+ * 字幕效果意图档位（outcome presets）。界面上叫「识别策略」，在「更多设置 › 专家」里
+ * 选择；普通用户通过「场景」间接获得合适的档位（原名「字幕效果」，第四档原叫「自定义」，
+ * 现为「手动调节」）。
  *
  * 把 maxContext / useVAD / reduceRepetition 三个互相重叠、还会互相覆盖的机制旋钮，
- * 收敛成「视频类型 / 想要的效果」单选（文字最准 / 均衡 / 最干净最稳 / 自定义），
+ * 收敛成「视频类型 / 想要的效果」单选（文字最准 / 均衡 / 最干净最稳 / 手动调节），
  * 并按引擎差异化映射到底层识别参数（逐任务运行时派生，不回写全局）。
  * 设计见 openspec/changes/subtitle-outcome-presets。
  *
@@ -23,11 +25,21 @@ export const TASK_VAD_SPECS = [
 ] as const;
 export const TASK_VAD_FIELDS = TASK_VAD_SPECS.map((spec) => spec.key);
 
+/**
+ * Whether the engine reads 识别策略 (the outcome tier) and the task-level VAD knobs at all.
+ * The cloud and local-command engines hand the audio to someone else and never call
+ * `resolveEffectiveSettings`, so the UI shows a one-line note for them instead of a choice
+ * that would do nothing.
+ */
+export function supportsOutcomeStrategy(engine: string | undefined): boolean {
+  return engine !== 'cloud' && engine !== 'localCli';
+}
+
 export function supportsTaskVadField(
   engine: string | undefined,
   key: string,
 ): boolean {
-  if (engine === 'cloud' || engine === 'localCli') return false;
+  if (!supportsOutcomeStrategy(engine)) return false;
   if (key === 'vadSamplesOverlap') return isBuiltinEngineId(engine);
   if (key === 'vadSpeechPad')
     return isBuiltinEngineId(engine) || engine === 'fasterWhisper';

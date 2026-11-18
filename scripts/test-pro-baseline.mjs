@@ -32,6 +32,7 @@ const scripts = [
   'test:task-readiness',
   'test:task-submission',
   'test:task-defaults',
+  'test:translate-content',
   'test:scenario-presets',
   'test:pipeline',
   'test:recipes',
@@ -43,6 +44,7 @@ const scripts = [
   'test:speaker-diarization',
   'test:manuscript',
   'test:audio-cache',
+  'test:embedded-subtitle-scan',
 ];
 
 for (const script of scripts) {

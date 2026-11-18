@@ -7,6 +7,8 @@ export interface TaskSubmission {
   files: IFiles[];
   formData: Record<string, any> & { taskType: PipelineWorkItemType };
   name?: string;
+  /** Isolated compatibility continuation; never supplies cross-run cache evidence. */
+  resumeLegacy?: boolean;
 }
 
 export type TaskSubmissionResult =
@@ -16,6 +18,7 @@ export type TaskSubmissionResult =
       requestId: string;
       acceptedFileUuids: string[];
       duplicate: boolean;
+      runId?: string;
     }
   | { success: false; error: string };
 

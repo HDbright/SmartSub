@@ -6,14 +6,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { logMessage } from './storeManager';
 import { getMd5, ensureTempDir, timemarkToSeconds } from './fileUtils';
 import { getAudioCacheKey } from './audioCacheKey';
+import { FIRST_AUDIO_STREAM } from './audioStreamSelection';
 import { getTaskContext, TaskCancelledError } from './taskContext';
 import { energySpeechSegments } from './subtitleTiming';
 import { computeChunkBoundaries } from './cloudAudioChunking';
-import { spawn } from 'child_process';
-import {
-  parseSubtitleStreams,
-  EmbeddedSubtitleStream,
-} from './embeddedSubtitleParser';
 import { stderrTail, toFriendlyFfmpegError } from './ffmpegErrorUtils';
 import { readWavInfo, type WavInfo } from './dubbing/audioPipeline';
 import { windowFrameDb } from './wavWindowEnergy';
@@ -89,7 +85,7 @@ export const extractAudio = (
         .audioFrequency(16000)
         .audioChannels(1)
         .audioCodec('pcm_s16le')
-        .outputOptions('-y')
+        .outputOptions(['-map', FIRST_AUDIO_STREAM, '-y'])
         .on('start', function (str) {
           onProgress(0);
           logMessage(`extract audio start ${str}`, 'info');
@@ -166,9 +162,11 @@ export async function extractAudioFromVideo(event, file) {
   logMessage(`tempDir: ${tempDir}`, 'info');
   // 缓存键含文件大小与 mtime：同路径换了视频不会再命中旧音频（issue #510）。
   // 读不到文件状态（null）就无法证明缓存仍对应当前文件：不复用，直接重新抽取。
-  const cacheKey = getAudioCacheKey(filePath);
+  const cacheKey = file.taskRunId ? null : getAudioCacheKey(filePath);
   const md5FileName = cacheKey ?? getMd5(filePath);
-  const tempAudioFile = path.join(tempDir, `${md5FileName}.wav`);
+  const tempAudioFile = file.taskRunId
+    ? path.join(file.directory, 'extracted-audio.wav')
+    : path.join(tempDir, `${md5FileName}.wav`);
   file.tempAudioFile = tempAudioFile;
 
   if (cacheKey && fs.existsSync(tempAudioFile)) {
@@ -178,8 +176,10 @@ export async function extractAudioFromVideo(event, file) {
   }
   if (!cacheKey) {
     logMessage(
-      `audio cache bypassed, cannot stat source: ${filePath}`,
-      'warning',
+      file.taskRunId
+        ? `audio cache managed by task run: ${file.taskRunId}`
+        : `audio cache bypassed, cannot stat source: ${filePath}`,
+      file.taskRunId ? 'info' : 'warning',
     );
   }
 
@@ -188,56 +188,9 @@ export async function extractAudioFromVideo(event, file) {
   return tempAudioFile;
 }
 
-/**
- * 探测视频内封字幕流：spawn 内置 ffmpeg `-i` 解析 stderr，永不 reject。
- * ffmpeg 因无输出文件以非零码退出属正常，照常解析 stderr。带超时保护。
- */
-export function probeEmbeddedSubtitles(
-  videoPath: string,
-  timeoutMs = 15000,
-): Promise<EmbeddedSubtitleStream[]> {
-  return new Promise((resolve) => {
-    let stderr = '';
-    let settled = false;
-    let timer: NodeJS.Timeout;
-    const done = (result: EmbeddedSubtitleStream[]) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    let child;
-    try {
-      child = spawn(ffmpegPath, ['-hide_banner', '-i', videoPath]);
-    } catch (err) {
-      logMessage(`probe embedded subtitle spawn failed: ${err}`, 'warning');
-      resolve([]);
-      return;
-    }
-    timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {}
-      logMessage(`probe embedded subtitle timeout: ${videoPath}`, 'warning');
-      done([]);
-    }, timeoutMs);
-    child.stderr.on('data', (d) => {
-      stderr += d.toString();
-    });
-    child.on('error', (err) => {
-      logMessage(`probe embedded subtitle error: ${err}`, 'warning');
-      done([]);
-    });
-    child.on('close', () => {
-      try {
-        done(parseSubtitleStreams(stderr));
-      } catch (err) {
-        logMessage(`parse subtitle streams failed: ${err}`, 'warning');
-        done([]);
-      }
-    });
-  });
-}
+// 探测函数已搬到只依赖 ffmpeg-static 的独立模块（便于单测与开始前的批量探测）；
+// 此处原样再导出，流水线与既有测试桩的引用路径不变。
+export { probeEmbeddedSubtitles } from './embeddedSubtitleProbe';
 
 /**
  * 抽取指定内封字幕轨为 SRT（-map 0:s:N -c:s srt）。复用 runningCommands 支持取消；

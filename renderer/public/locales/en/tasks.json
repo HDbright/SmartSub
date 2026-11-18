@@ -7,10 +7,9 @@
     "retry": "Retry save",
     "loadFailed": "The task draft could not be loaded. Editing and running are unavailable."
   },
-  "advancedSettings": "Expert settings",
   "readiness": {
-    "translation_style_requires_ai": "Conversational translation requires an AI provider. Select one, or choose standard translation in expert settings.",
-    "speaker_diarization_unavailable": "Speaker models or runtime are unavailable. Install them on the Engines page, or turn off speaker diarization in expert settings.",
+    "translation_style_requires_ai": "Conversational translation requires an AI provider. Select one, or choose standard translation in More settings › Common.",
+    "speaker_diarization_unavailable": "Speaker models or runtime are unavailable. Install them on the Engines page, or turn off speaker diarization in More settings › Common.",
     "tts_unavailable": "The selected speech engine is missing or not configured.",
     "tts_voice_unavailable": "The selected voice is no longer available. Select it again.",
     "tts_language_unsupported": "The selected speech engine does not support the dubbing language.",
@@ -103,6 +102,7 @@
     "composeEncoder": "Encoder",
     "composeEncoderUnavailable": "(unavailable on this device)",
     "composeAudioHint": "The dub track will replace the original audio automatically",
+    "composeContentHint": "Subtitles in the final video follow the \"Output content\" setting: {{content}}",
     "composeStyleHint": "Fine-tune styles in the compose workbench and save them as my styles. ",
     "composeStyleLink": "Adjust style",
     "gatesTitle": "Manual review (optional)",
@@ -165,6 +165,7 @@
     "tagAi": "AI / LLM",
     "tagTraditional": "Traditional MT",
     "toastTraditionalRefineConflict": "Switched to \"{{provider}}\". Since \"{{feature}}\" is enabled, traditional MT cannot be used for AI refine — please select an AI provider in \"Line break & refine\" or disable it.",
+    "output": "Output",
     "style": "Output content",
     "format": "Subtitle format",
     "embeddedSubtitles": "Prefer embedded subtitles",
@@ -246,10 +247,35 @@
   "skippedDuplicates": "Skipped {{count}} duplicate file(s)",
   "goDownloadModel": "Download model",
   "goConfigureProvider": "Set up service",
-  "advanced": "Advanced options",
-  "advancedDesc": "Details you rarely change — the defaults are best practice",
+  "settings": {
+    "title": "More settings",
+    "description": "Defaults suit most videos. Adjust only what you need.",
+    "tabs": {
+      "common": "Common",
+      "expert": "Expert"
+    },
+    "summary": {
+      "scenario": "Scenario",
+      "adjusted": "{{count}} adjusted",
+      "restore": "Restore scenario defaults"
+    },
+    "groups": {
+      "source": "Subtitle source",
+      "assist": "Recognition aids",
+      "translate": "Translation & polish",
+      "output": "Output & saving",
+      "run": "Run",
+      "strategy": "Recognition strategy",
+      "segmentTuning": "Line-break tuning",
+      "decoding": "Decoding parameters"
+    },
+    "strategy": {
+      "hint": "Decides whether recognition favors keeping every detail or suppressing repeated and hallucinated lines. The scenario already picked a fitting level; change it only to override.",
+      "unsupported": "The current engine (cloud transcription / local command) does not use a recognition strategy; the service or command decides the result."
+    }
+  },
   "outcome": {
-    "label": "Subtitle effect",
+    "label": "Recognition strategy",
     "recommended": "Recommended",
     "accurate": {
       "title": "Most accurate text",
@@ -268,9 +294,9 @@
       "scene": "Best for long videos or material with music / applause / long silence"
     },
     "custom": {
-      "title": "Custom",
+      "title": "Manual tuning",
       "desc": "Manually tune context length, VAD, repetition reduction and other low-level parameters.",
-      "sectionTitle": "Custom parameters",
+      "sectionTitle": "Manual parameters",
       "sherpaNote": "For the current engine (FunASR / Qwen / FireRed / Parakeet), VAD is always on and there is no context-length / repetition concept. To fine-tune VAD sensitivity, use the Settings page."
     },
     "compare": {
@@ -281,10 +307,10 @@
       "clean": "Today let's go over this new feature"
     }
   },
-  "section": {
-    "recognition": "Transcription",
-    "output": "Output & saving",
-    "execution": "Execution"
+  "embeddedSubtitleSetting": {
+    "description": "When a video carries a text subtitle track, extract it instead of running speech recognition. Videos without one are transcribed as usual.",
+    "promptLabel": "Ask me before starting",
+    "promptDescription": "When a video has embedded subtitles, ask once before the task starts."
   },
   "vad": {
     "label": "Voice activity detection (VAD)",
@@ -511,7 +537,7 @@
     "subtitleFormats": "Supports SRT / VTT / ASS / SSA / LRC subtitles",
     "step1": "Import files",
     "step2": "Check the configuration",
-    "step2Desc": "Pick engine, model and languages in the config bar above; advanced options are top right",
+    "step2Desc": "Pick engine, model and languages in the config bar above; More settings is top right",
     "step3": "Start the task",
     "step3Desc": "Hit Start in the bottom-right corner to batch-process with live progress"
   },
@@ -564,30 +590,55 @@
       "preserveSpeechPauses": "Preserve speech pauses"
     },
     "title": "Scenario Presets",
-    "customHint": "Tuning parameters below switches to custom",
+    "adjusted": "Adjusted",
+    "footer": {
+      "adjusted": "Adjusted: {{groups}}. Switching scenario resets them.",
+      "restore": "Restore “{{name}}”",
+      "custom": "No longer matches any scenario. Pick one to reset.",
+      "groupSeparator": ", ",
+      "moreSettings": "More settings",
+      "expertSettings": "Expert settings"
+    },
+    "groups": {
+      "recognitionStrategy": "Recognition strategy",
+      "decoding": "Decoding",
+      "vadRepetition": "VAD & repetition",
+      "segmentLength": "Line length",
+      "segmentTuning": "Line-break tuning",
+      "speakerDiarization": "Speaker diarization",
+      "aiCorrection": "AI correction",
+      "fillerPolicy": "Filler words",
+      "translationStyle": "Translation style",
+      "subtitleLayout": "Subtitle layout"
+    },
     "interview": {
       "name": "Meeting / Podcast",
+      "scene": "Several people taking turns: meetings, interviews, podcasts",
       "desc": "Short cues, local speaker clustering and original pauses; requires speaker models"
     },
     "lecture": {
       "name": "Lecture / Tutorial",
+      "scene": "One speaker, dense content: courses, talks, tutorials",
       "desc": "VAD, anti-repetition, glossary correction and fewer hesitations; requires AI refinement"
     },
     "movie": {
       "name": "Movie / Vlog",
+      "scene": "Dialogue with emotion: films, series, vlogs",
       "desc": "Compact two-line layout, natural pacing and emotion; translation requires AI"
     },
     "shortDrama": {
       "name": "Short Drama / Shorts",
+      "scene": "Fast pace, short lines: short dramas, short videos",
       "desc": "Compact two-line cues, pauses and emotion; translation requires AI"
     },
     "balanced": {
       "name": "Balanced",
-      "desc": "Balanced accuracy and speed, suitable for most general scenarios"
+      "scene": "When unsure, pick this: most everyday videos",
+      "desc": "Balances speed and segmentation stability without changing any extra setting"
     },
     "custom": {
-      "name": "Expert Custom",
-      "desc": "Fine-tune Beam Size, VAD thresholds, and hallucination filters"
+      "name": "Custom",
+      "desc": "Manual tuning was chosen in More settings › Expert, so it no longer matches any scenario"
     }
   },
   "configLoad": {
@@ -677,5 +728,81 @@
       "interrupted": "Interrupted; waiting to retry",
       "paused": "Paused; waiting to resume"
     }
+  },
+  "runs": {
+    "current": "Current run",
+    "history": "Run history",
+    "editNext": "Edit next run",
+    "retry": "Retry failed stages",
+    "readOnly": "Historical result (read only)",
+    "configuration": "Execution configuration",
+    "lockedHint": "Configuration and files are locked for this run. Pausing releases processing resources after the current stage.",
+    "draftHint": "Editing the next-run draft. Starting reevaluates every file and reuses valid unchanged stage results.",
+    "resultHint": "This run’s results and configuration are preserved. Edit the next-run draft or start again with the same configuration. Previous manual edits are not inherited.",
+    "stages": {
+      "prepareInput": "Verify input",
+      "extractAudio": "Extract audio",
+      "extractSubtitle": "Acquire subtitles",
+      "refineSubtitle": "Refine subtitles",
+      "manuscriptMatch": "Match manuscript",
+      "normalizeSubtitle": "Normalize subtitles",
+      "summarizeEpisode": "Summarize",
+      "translateSubtitle": "Translate",
+      "speakerDiarization": "Identify speakers",
+      "annotateSpeakers": "Annotate speakers",
+      "prepareProofread": "Prepare review",
+      "exportSubtitle": "Export subtitles",
+      "subtitleReview": "Subtitle review",
+      "dubbing": "Dubbing",
+      "dubbingTrack": "Build audio track",
+      "dubbingReview": "Dubbing review",
+      "composeVideo": "Compose video"
+    },
+    "status": {
+      "preparing": "Preparing",
+      "queued": "Queued",
+      "running": "Running",
+      "pausing": "Pausing after this stage",
+      "paused": "Paused",
+      "waiting_review": "Waiting for review",
+      "cancelling": "Cancelling",
+      "cancelled": "Cancelled",
+      "succeeded": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted"
+    },
+    "outcome": {
+      "executed": "Executed",
+      "reused": "Reused",
+      "not_applicable": "Not applicable",
+      "degraded": "Completed with warnings",
+      "pending": "Pending",
+      "running": "Running",
+      "succeeded": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "waiting_review": "Awaiting review",
+      "cancelled": "Cancelled"
+    },
+    "legacyHint": "Legacy run: some effective configuration is unavailable. Current defaults have not been substituted for historical settings."
+  },
+  "processing": {
+    "processAgain": "Process again",
+    "configLocked": "Settings are locked while processing. Cancel to change settings and start again.",
+    "adjustAndRepeat": "Adjust settings and process again. Unchanged steps are reused automatically."
+  },
+  "stageSettings": {
+    "label": "Processing settings",
+    "subtitle": "Subtitles",
+    "subtitleTranslate": "Subtitles & translation",
+    "dubbing": "Dubbing",
+    "compose": "Video composition",
+    "review": "Workflow",
+    "automatic": "Continue automatically",
+    "savedValue": "Saved selection",
+    "choose": "Choose",
+    "dubbingUnavailable": "The saved engine and voice are currently unavailable. Check the service settings or choose another voice.",
+    "styleSnapshot": "This task uses its saved subtitle style. Select a style to update it.",
+    "composeOptionsUnavailable": "Some composition options could not be loaded. Task settings were preserved. Reopen the page to retry."
   }
 }

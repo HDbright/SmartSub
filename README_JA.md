@@ -24,6 +24,21 @@
 
 ![SmartSub ホーム画面](./resources/preview/home.png)
 
+## スペシャルスポンサー
+
+<a href="https://www.aiyoyoo.com/register?aff=YWL9FL2XFPKM" target="_blank" rel="noopener noreferrer"><img src="./resources/sponsors/crazytoken-ja.png" alt="SmartSub × CrazyToken：全モデル対応、最大 99% 節約、最低 0.05x、新規登録で $20 分のお試しクレジット" /></a>
+
+❤️ SmartSub をご支援いただいているスポンサー [**CrazyToken**](https://www.aiyoyoo.com/register?aff=YWL9FL2XFPKM) に感謝いたします！
+
+#### CrazyToken | 多彩なモデルで字幕翻訳をサポート。言語を越えて、より自然な表現へ。料金倍率は最低0.05x、最大99%節約
+
+CrazyToken は、Claude、GPT、Gemini、Kimi、GLM、DeepSeek、Qwen、Grok などの主要モデルの API を提供し、字幕翻訳、文脈理解、用語統一、校正・推敲をサポートします。講義動画、インタビュー・ポッドキャスト、多言語コンテンツの制作など、言語や作業内容に応じて最適なモデルを選べます。
+
+- 💰 **最低0.05×で、字幕翻訳のコストを削減**：モデル料金は公式価格の5%から。トークン単位の明細を確認できる透明な料金体系で、長尺動画の字幕翻訳や一括処理にかかるモデル API の利用コストを抑えられます。
+- ✨ **公式のネイティブチャネルを利用**：出力品質の意図的な低下、モデルの混在、長いコンテキストの圧縮は行いません。前後の文脈の理解、用語の統一、訳文のブラッシュアップをモデルがサポートします。
+- ⚡ **安定・高速、大量の同時リクエストにもレート制限なし**：字幕の一括翻訳や複数タスクの処理に安定した API サービスを提供し、待ち時間を短縮します。
+- 🎁 **新規登録で$20分のクレジットをプレゼント**：[専用リンク](https://www.aiyoyoo.com/register?aff=YWL9FL2XFPKM)から登録すると、**$20分のお試しクレジット**を獲得できます。チャージ時には追加ボーナスもご用意。**1対1のリモート設定サポート**で、担当者がモデル API の設定をお手伝いします。
+
 ## SmartSub とは
 
 妙幕（SmartSub）はオープンソースの字幕・吹き替えツールです。**音声の文字起こし → 字幕翻訳 → 校正 → AI 吹き替え（TTS）→ 焼き込み合成** という一連のパイプラインを、1 つのデスクトップアプリで完結できます。オンライン動画ダウンロードも内蔵しており、YouTube や Bilibili などのリンクを貼り付けるだけで素材を取得できます。文字起こしは whisper.cpp や sherpa-onnx などのローカルモデルで実行され、ファイルが外部に送信されることはありません。バッチ処理に対応し、NVIDIA / AMD / Intel / Apple Silicon の GPU アクセラレーションを利用でき、Windows・macOS・Linux で動作します。
@@ -176,6 +191,16 @@ brew upgrade --cask smartsub # アップグレード
 1. インストール後、初回ガイドに従って音声モデルをダウンロード（GPU がない、またはモデルを入れたくない場合はクラウド文字起こしを設定）
 2. ランチパッドからタスクを選び、音声・動画または字幕ファイルをドロップ（リンクを貼り付けてオンライン動画をダウンロードすることも可能）して、ソース言語・ターゲット言語などを設定
 3. 処理を開始——完了後は校正・吹き替え・焼き込みへ続けられます
+
+## コード署名ポリシー（Code signing policy）
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)
+
+- **署名の対象**：Windows インストーラー（`SmartSub_Windows_<バージョン>_x64.exe`）。署名は GitHub Actions で自動的に行われ、リリースごとに署名前の手動承認が必要です。署名は証明書の発行後に最初にリリースされるバージョンから適用され、それ以前のバージョンは未署名です。
+- **チームの役割**：
+  - Authors（ソースコードを直接変更できる）と Reviewers（外部コントリビューターの Pull Request をレビューする）：[@buxuku](https://github.com/buxuku)
+  - Approvers（リリースごとの署名を承認する）：[@buxuku](https://github.com/buxuku)
+- **プライバシーポリシー**：SmartSub は利用データを収集・送信せず、解析用 SDK も含みません。起動時に自動で通信するのは更新確認のみで、次の2つです。アプリ本体の更新確認（GitHub Releases へのリクエスト。設定の「Check for updates on startup」で無効にできます）と、faster-whisper ランタイムをインストールしている場合にのみ行う1日1回の新バージョン確認（GitHub へのリクエスト。通知のみで自動ダウンロードはせず、この設定では無効になりません）。モデル・アクセラレーションパック・動画ダウンロードエンジンの取得、オンライン動画のダウンロード、クラウドの翻訳・文字起こし・吹き替えは、該当機能を使うときだけ通信し、内容はあなたが選択・設定したサービスにのみ送信されます。それらのサービスにはそれぞれのプライバシーポリシーが適用されます。クラッシュ診断とログは端末内にのみ保存され、自動的にアップロードされることはありません。
 
 ## さらに詳しく
 
@@ -430,6 +455,7 @@ yarn dev
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — FunASR / Qwen3-ASR / FireRedASR とローカル TTS のランタイム
 - [FFmpeg](https://ffmpeg.org/) — メディア処理と字幕焼き込み
 - [Bob](https://bobtranslate.com/) — 翻訳サービス申請のドキュメント
+- [LINUX DO](https://linux.do) — 新しい理想型コミュニティ（交流とフィードバックに感謝）
 
 ## ライセンス
 

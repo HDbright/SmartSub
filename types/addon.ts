@@ -44,6 +44,8 @@ export type GpuVendor = 'nvidia' | 'amd' | 'intel' | 'apple' | 'unknown';
 export interface GpuInfo {
   name: string;
   vendor: GpuVendor;
+  /** OS-reported driver version; Windows includes AMD, Intel and virtual adapters. */
+  driverVersion?: string;
   /** CUDA device index reported by nvidia-smi (NVIDIA only). */
   index?: number;
   /** Stable NVIDIA GPU UUID used by CUDA_VISIBLE_DEVICES. */
@@ -153,6 +155,7 @@ export interface AddonRecommendation {
     | 'cudaVersionTooOld'
     | 'maxCudaUnknown'
     | 'toolkitInstalled'
+    | 'toolkitIncompatible'
     | 'toolkitMissing';
 }
 
@@ -187,8 +190,29 @@ export interface GpuEnvironment {
 }
 
 /**
- * 已安装的加速包信息
+ * Verified installation identity; URLs exclude credentials and query strings.
  */
+export interface AddonInstallProvenance {
+  formatVersion: 1;
+  source: DownloadSource;
+  packageType: 'node.gz' | 'tar.gz';
+  packageUrl: string;
+  manifestUrl: string;
+  /** Identity from the same mirror's manifest, captured before downloading. */
+  releaseVersion: string;
+  updateNotes: string;
+  expectedSha256: string;
+  packageSha256: string;
+  /** Hash of the extracted addon.node; distinct from the compressed package. */
+  addonSha256: string;
+  verifiedAt: string;
+}
+
+export interface AddonDownloadResult {
+  directory: string;
+  provenance: AddonInstallProvenance;
+}
+
 export interface InstalledAddon {
   /** 安装时间 */
   installedAt: string;
@@ -198,8 +222,10 @@ export interface InstalledAddon {
   hasDlls: boolean;
   /** 文件大小 (字节) */
   size: number;
-  /** 文件校验和 */
+  /** 下载压缩包的 SHA-256（不是解压后的 addon.node） */
   checksum?: string;
+  /** Older installations have no verified provenance. */
+  provenance?: AddonInstallProvenance;
 }
 
 /**
@@ -316,6 +342,8 @@ export interface AddonUpdateInfo {
 export interface DownloadState {
   /** 下载 URL */
   url: string;
+  /** Bind resumed bytes to the manifest's artifact, even when latest changes. */
+  expectedChecksum?: string;
   /** 目标路径 */
   destPath: string;
   /** 临时文件路径 */

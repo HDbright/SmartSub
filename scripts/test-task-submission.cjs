@@ -12,13 +12,14 @@ function harness(initial) {
   };
   let writeFailure = false;
   let writes = 0;
-  let releaseDetection;
-  const detection = new Promise((resolve) => {
-    releaseDetection = resolve;
+  let releaseProcessing;
+  const processing = new Promise((resolve) => {
+    releaseProcessing = resolve;
   });
   const handlers = new Map();
   const cache = new Map();
   const processed = [];
+  const runs = [];
   const events = [];
   let warmups = 0;
   const store = {
@@ -45,12 +46,15 @@ function harness(initial) {
     './store': { store },
     './storeManager': { store, logMessage() {} },
     './fileProcessor': {
-      processFile: async (event, file) => {
+      processFile: async (event, file, formData) => {
+        await processing;
         processed.push(file);
+        runs.push(formData);
         event.sender.send('taskStatusChange', file, 'extractSubtitle', 'done');
       },
     },
-    './whisper': { checkOpenAiWhisper: () => detection },
+    // A stalled system CLI probe must never delay task acceptance or dispatch.
+    './whisper': { checkOpenAiWhisper: () => new Promise(() => {}) },
     './utils': { isAppleSilicon: () => false },
     './providerMigration': { resolveProviderFallbacks: () => [] },
     '../service/configurationManager': { configurationManager: {} },
@@ -123,6 +127,7 @@ function harness(initial) {
     items,
     processor,
     processed,
+    runs,
     events,
     warmups: () => warmups,
     submit: (payload) => handlers.get('submitTask')({ sender }, payload),
@@ -132,7 +137,7 @@ function harness(initial) {
     fail: (value) => {
       writeFailure = value;
     },
-    release: () => releaseDetection(false),
+    release: () => releaseProcessing(),
   };
 }
 
@@ -198,7 +203,11 @@ async function main() {
   assert.equal(state.disk().workItems[0].configSnapshot.nested.value, 1);
   state.release();
   await new Promise(setImmediate);
-  assert.equal(state.processed.length, 1);
+  assert.equal(
+    state.processed.length,
+    1,
+    'dispatch does not wait for a CLI probe',
+  );
   assert.equal(
     state.events.find(([channel]) => channel === 'taskStatusChange')[1]
       .taskProjectId,
@@ -294,8 +303,79 @@ async function main() {
     state.warmups() > 0,
     'media without provided subtitles still warms up ASR',
   );
+
+  // A task that translates always carries a valid output style, whoever built the request.
+  const styleRequest = (formData) => ({
+    projectId: 'style',
+    requestId: 'style-request',
+    files: [{ uuid: 'subtitle', filePath: '/tmp/clip.srt', fileName: 'clip' }],
+    formData: {
+      taskType: 'translateOnly',
+      sourceLanguage: 'en',
+      targetLanguage: 'fr',
+      translateProvider: 'provider',
+      ...formData,
+    },
+  });
+  async function styleOf(formData) {
+    const run = harness();
+    const request = styleRequest(formData);
+    const before = structuredClone(request);
+    assert.equal(run.submit(request).success, true);
+    run.release();
+    await new Promise(setImmediate);
+    assert.deepEqual(request, before, 'the caller request is never mutated');
+    return { stored: run.disk().workItems[0].configSnapshot, ran: run.runs[0] };
+  }
+  for (const [label, formData, style] of [
+    ['missing', {}, 'onlyTranslate'],
+    ['unknown', { translateContent: 'both' }, 'onlyTranslate'],
+    [
+      'chosen',
+      { translateContent: 'translateAndSource' },
+      'translateAndSource',
+    ],
+  ]) {
+    const { stored, ran } = await styleOf(formData);
+    assert.equal(stored.translateContent, style, `${label} style is stored`);
+    assert.equal(ran.translateContent, style, `${label} style is what runs`);
+  }
+  const transcribeOnly = await styleOf({ taskType: 'generateOnly' });
+  assert.equal(
+    'translateContent' in transcribeOnly.stored,
+    false,
+    'a task that never translates is stored exactly as submitted',
+  );
+  assert.equal('translateContent' in transcribeOnly.ran, false);
+
+  const legacy = harness();
+  legacy.items.saveWorkItem(
+    {
+      id: 'style',
+      type: 'translateOnly',
+      name: 'Legacy',
+      createdAt: 1,
+      updatedAt: 1,
+      status: 'waiting',
+      pipelineFiles: [{ uuid: 'kept', filePath: '/tmp/kept.srt' }],
+      configSnapshot: {
+        taskType: 'translateOnly',
+        sourceLanguage: 'en',
+        targetLanguage: 'fr',
+        translateProvider: 'provider',
+        subtitleOutputFormats: ['srt'],
+      },
+    },
+    { durable: true },
+  );
+  assert.equal(legacy.submit(styleRequest({})).success, true);
+  assert.equal(
+    legacy.disk().workItems[0].configSnapshot.translateContent,
+    'onlyTranslate',
+    'a retried project pinned before the style existed is completed too',
+  );
   console.log(
-    'Task submission: durable acceptance, rollback, replay, busy/config conflicts, snapshot isolation, restart and queue dispatch passed.',
+    'Task submission: durable acceptance, rollback, replay, busy/config conflicts, snapshot isolation, restart, queue dispatch and output style passed.',
   );
 }
 main().catch((error) => {

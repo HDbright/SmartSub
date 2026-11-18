@@ -27,7 +27,13 @@ import {
   embeddedFontContext,
   listSubtitleFonts,
   prepareSubtitleFonts,
+  recommendFontsForText,
+  type FontFallbackSummary,
 } from './fontResolver';
+import {
+  detectSubtitleFormatFromContent,
+  parseSubtitleCues,
+} from './subtitleFormats';
 import { getHwAccelInfo } from './hwEncoderDetector';
 import { store } from './store';
 import type { StoreType } from './store/types';
@@ -412,6 +418,7 @@ export function setupSubtitleMergeHandlers(
           fontNames,
           embeddedFonts,
           fontSubstituted,
+          fontReport,
           translateY,
         } = buildAssForSubtitle(content, pathForFormat, style);
         return {
@@ -421,11 +428,13 @@ export function setupSubtitleMergeHandlers(
           fontName: effectiveStyle.fontName,
           fontNames,
           fontSubstituted,
+          fontReport,
           embeddedFonts,
         } as SubtitleMergeResponse<string> & {
           fontName: string;
           fontNames: string[];
           fontSubstituted: boolean;
+          fontReport: FontFallbackSummary;
         };
       } catch (error) {
         logMessage(`生成预览 ASS 失败: ${error}`, 'error');
@@ -445,6 +454,44 @@ export function setupSubtitleMergeHandlers(
       success: true,
       data: await listSubtitleFonts(await subtitleFonts(payload?.subtitlePath)),
     }),
+  );
+  // Fonts that render the whole subtitle without any fallback (for the "recommended font" prompt).
+  ipcMain.handle(
+    'subtitleMerge:recommendFonts',
+    async (
+      _event,
+      {
+        subtitlePath,
+        sampleText,
+        fontName,
+      }: {
+        subtitlePath?: string | null;
+        sampleText?: string;
+        fontName?: string;
+      },
+    ) => {
+      try {
+        let text = sampleText || '字幕预览效果';
+        let context: ReturnType<typeof embeddedFontContext> = [];
+        if (subtitlePath) {
+          const content = await fs.promises.readFile(subtitlePath, 'utf-8');
+          const format = detectSubtitleFormatFromContent(subtitlePath, content);
+          if (format === 'ass') context = embeddedFontContext(content);
+          text = parseSubtitleCues(content, format)
+            .map((cue) => cue.text.replace(/\{[^}]*\}/g, ''))
+            .join('\n');
+        }
+        return {
+          success: true,
+          data: await recommendFontsForText(text, context, {
+            exclude: fontName,
+          }),
+        };
+      } catch (error) {
+        logMessage(`查找推荐字体失败: ${error}`, 'warning');
+        return { success: false, error: String(error) };
+      }
+    },
   );
   ipcMain.handle(
     'subtitleMerge:getFontData',

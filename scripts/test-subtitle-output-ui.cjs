@@ -222,6 +222,81 @@ try {
   console.log(
     'Toolbar labels: truncating labels, hint as an info icon, truncating call-to-action buttons',
   );
+
+  // 工具栏按流水线阶段排列：听（语音模型、视频语言、场景、断句与精修）｜
+  // 译（翻译成、翻译服务、词库、生成摘要）｜ 出（输出）。各任务类型只显示与自己
+  // 相关的控件，相对顺序不变。紧凑工具栏共用可换行的 fieldset，宽度不足时
+  // 自然换行，不再依赖阶段首项的左边框来分隔（换行后会落在错误位置）。
+  const toolbarOrder = {
+    generateAndTranslate: [
+      'configBar.model',
+      'configBar.sourceLanguage',
+      'configBar.scenario',
+      'refine.control.label',
+      'configBar.targetLanguage',
+      'configBar.provider',
+      'configBar.glossary',
+      'configBar.generateSummary',
+      'configBar.output',
+    ],
+    generateOnly: [
+      'configBar.model',
+      'configBar.sourceLanguage',
+      'configBar.scenario',
+      'refine.control.label',
+      'configBar.output',
+    ],
+    translateOnly: [
+      'configBar.subtitleSourceLanguage',
+      'configBar.targetLanguage',
+      'configBar.provider',
+      'configBar.glossary',
+      'configBar.generateSummary',
+      'configBar.output',
+    ],
+  };
+  for (const typeDef of TASK_TYPES) {
+    const html = renderToStaticMarkup(
+      React.createElement(InlineConfigBar, {
+        form: { setValue() {} },
+        formData: {
+          taskType: typeDef.taskType,
+          sourceLanguage: 'en',
+          targetLanguage: 'zh',
+          translateProvider: '-1',
+          subtitleOutputFormats: ['srt'],
+        },
+        typeDef,
+        systemInfo: { modelsInstalled: [], downloadingModels: [] },
+        providers: [],
+        asrProviders: [],
+        useLocalWhisper: false,
+      }),
+    );
+    const labels = [
+      ...html.matchAll(
+        /<span title="([^"]+)" class="truncate text-xs text-muted-foreground">/g,
+      ),
+    ].map((match) => match[1]);
+    assert.deepEqual(
+      labels,
+      toolbarOrder[typeDef.taskType],
+      `${typeDef.taskType}: the toolbar runs 听 → 译 → 出`,
+    );
+    assert.match(
+      html,
+      /<fieldset[^>]*class="[^"]*\bflex-wrap\b/,
+      `${typeDef.taskType}: compact controls can wrap without clipping`,
+    );
+    assert.ok(
+      !html.includes('title="configBar.format"') &&
+        !html.includes('>configBar.format<'),
+      `${typeDef.taskType}: the output control is labelled 输出; 字幕格式 is a title inside its popover`,
+    );
+  }
+  console.log(
+    'Toolbar order: 听 → 译 → 出 for all 3 task types in a wrapping compact toolbar',
+  );
 } finally {
   Module._load = originalLoad;
   for (const [ext, original] of Object.entries(extensions)) {

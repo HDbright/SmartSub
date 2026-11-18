@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface TaskProjectSave {
   id: string;
+  runId?: string;
+  draftRevision?: number;
   taskType: string;
   files: any[];
   taskDraft?: { config: Record<string, any>; manuscripts: any[] };
@@ -34,6 +36,7 @@ export function useTaskProjectPersistence(
   const acknowledged = useRef(new Map<string, string>());
   const discardedVersions = useRef(new Map<string, number>());
   const inFlight = useRef<Promise<boolean> | null>(null);
+  const draftRevisions = useRef(new Map<string, number>());
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
   const [error, setError] = useState<string | null>(null);
@@ -54,10 +57,27 @@ export function useTaskProjectPersistence(
             discardedVersions.current.get(current.payload.id) ?? 0;
           let saved: any;
           try {
-            saved = await window.ipc.invoke(
-              'saveTaskProject',
-              structuredClone(current.payload),
-            );
+            if (current.payload.runId) {
+              const draftKey = `${current.payload.id}:${current.payload.runId}:${current.payload.taskType}:${current.payload.draftRevision || 0}`;
+              if (!draftRevisions.current.has(draftKey)) {
+                draftRevisions.current.set(
+                  draftKey,
+                  current.payload.draftRevision || 0,
+                );
+              }
+              const draft = await window.ipc.invoke('taskRuns:saveDraft', {
+                projectId: current.payload.id,
+                expectedDraftRevision: draftRevisions.current.get(draftKey),
+                config: current.payload.taskDraft?.config || {},
+                files: current.payload.files,
+              });
+              draftRevisions.current.set(draftKey, draft.revision);
+              saved = { id: current.payload.id };
+            } else
+              saved = await window.ipc.invoke(
+                'saveTaskProject',
+                structuredClone(current.payload),
+              );
           } catch (cause) {
             if (
               version !==

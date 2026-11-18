@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { createHash, randomUUID } from 'crypto';
+import { taskRunService } from '../helpers/taskRuns/access';
 import {
   operations,
   operationMap,
@@ -10,6 +11,7 @@ import {
 import { redact, redactDiagnostics } from '../../automation/redact';
 import type { AutomationContext, AutomationJob } from '../../types/automation';
 import { isPipelineWorkItem } from '../../types/workItem';
+import { hasPendingTaskReview, projectRunFiles } from '../../types/taskRun';
 import { store } from '../helpers/store';
 import {
   getWorkItems,
@@ -161,25 +163,43 @@ export class AutomationService {
     const job = this.jobs.get(id);
     if (job) {
       this.refreshReview(job);
+      // Report actionable files immediately without ending the background waiter
+      // (or dropping its cancellation hook) while other files still execute.
+      const review =
+        !terminal.has(job.status) && this.pendingReview(job.projectId);
+      if (review)
+        return {
+          ...job,
+          status: 'review' as const,
+          progress: review.files,
+          result: review,
+          artifacts: review.artifacts,
+        };
       return job;
     }
     const item = getWorkItemById(id);
     if (!item) throw new Error('TASK_NOT_FOUND');
     const { configSnapshot, ...result } = item;
+    const review = isPipelineWorkItem(item) && this.pendingReview(id);
     return {
       id,
       operation: item.type,
-      status:
-        (
-          { waiting: 'queued', done: 'completed', error: 'failed' } as Record<
-            string,
-            string
-          >
-        )[item.status] || item.status,
+      status: review
+        ? 'review'
+        : (
+            { waiting: 'queued', done: 'completed', error: 'failed' } as Record<
+              string,
+              string
+            >
+          )[item.status] || item.status,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-      progress: item.pipelineFiles || item.downloadEntries,
-      artifacts: item.artifacts || collectArtifacts(result),
+      progress: review
+        ? review.files
+        : item.pipelineFiles || item.downloadEntries,
+      artifacts: review
+        ? review.artifacts
+        : item.artifacts || collectArtifacts(result),
       result,
       actions: ['running', 'waiting'].includes(item.status)
         ? isPipelineWorkItem(item)
@@ -191,6 +211,18 @@ export class AutomationService {
             ['error', 'interrupted'].includes(item.status)
           ? ['retry']
           : [],
+    };
+  }
+  private pendingReview(projectId?: string) {
+    const run = projectId ? taskRunService()?.get(projectId) : undefined;
+    if (!run || !hasPendingTaskReview(run)) return undefined;
+    const files = projectRunFiles(run);
+    return {
+      projectId: run.projectId,
+      status: 'review' as const,
+      files,
+      artifacts: collectArtifacts(files),
+      cancelled: false,
     };
   }
   async call(
@@ -351,8 +383,15 @@ export class AutomationService {
     const executionSignal = getTaskProjectSignal(projectId);
     while (isTaskProjectBusy(projectId)) {
       const item = getWorkItemById(projectId);
+      const run = taskRunService()?.get(projectId);
+      if (run?.status === 'waiting_review') break;
       const job = ctx.jobId && this.jobs.get(ctx.jobId);
       if (job) {
+        if (run)
+          job.status =
+            run.status === 'paused' || run.status === 'pausing'
+              ? 'paused'
+              : 'running';
         job.progress = redact(
           item?.pipelineFiles?.map((f) => ({
             uuid: f.uuid,
@@ -371,6 +410,7 @@ export class AutomationService {
         activity: f.taskActivity,
       }));
     const cancelled =
+      item.runStatus === 'cancelled' ||
       ctx.signal.aborted ||
       executionSignal?.aborted ||
       Boolean(
@@ -503,14 +543,24 @@ export class AutomationService {
         retryCtx.setCancel(() =>
           sendHandler('cancelTask', retryCtx.event, projectId),
         );
-        unwrap(
-          enqueueTaskSubmission({
+        const run = taskRunService()?.get(projectId);
+        if (run && ['failed', 'interrupted'].includes(run.status)) {
+          await invokeHandler('taskRuns:command', retryCtx.event, {
             projectId,
+            expectedRunId: run.runId,
             requestId: a.requestId || randomUUID(),
-            files: item.pipelineFiles,
-            formData: item.configSnapshot as any,
-          }),
-        );
+            command: 'retry',
+          });
+        } else
+          unwrap(
+            enqueueTaskSubmission({
+              projectId,
+              requestId: a.requestId || randomUUID(),
+              files: item.pipelineFiles,
+              resumeLegacy: !run,
+              formData: item.configSnapshot as any,
+            }),
+          );
         return this.waitProject(projectId, retryCtx);
       });
     }

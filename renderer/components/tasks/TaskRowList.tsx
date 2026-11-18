@@ -1,5 +1,6 @@
 import { TaskActivityDetails } from './TaskActivityDetails';
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AudioLines,
   Captions,
@@ -13,6 +14,7 @@ import {
   FileUp,
   FolderOpen,
   Loader2,
+  Minus,
   Play,
   RotateCcw,
   Settings2,
@@ -60,6 +62,7 @@ interface TaskRowListProps {
   typeDef: TaskTypeDef;
   formData: any;
   taskStatus: string;
+  inputsLocked?: boolean;
   manuscriptPool?: any[];
   onProofread: (file: any) => void;
   onDelete: (uuid: string) => void;
@@ -74,6 +77,7 @@ interface TaskRowListProps {
     manuscriptName?: string,
   ) => void;
   onImport?: () => void;
+  scrollElementRef?: React.RefObject<HTMLDivElement>;
 }
 
 export function RailChips({
@@ -88,12 +92,21 @@ export function RailChips({
   className?: string;
 }) {
   return (
-    <div className={cn('flex items-center gap-1 flex-shrink-0', className)}>
+    <div
+      data-testid="task-stage-rail"
+      className={cn(
+        'flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1.5',
+        className,
+      )}
+    >
       {rail.map((item, index) => {
         if (item.kind === 'gate') {
           const status = getGateStatus(file, item.gate.key);
           return (
-            <React.Fragment key={item.gate.key}>
+            <span
+              className="inline-flex items-center gap-1"
+              key={item.gate.key}
+            >
               {index > 0 && <ChevronRight className="h-3 w-3 text-faint" />}
               <span
                 data-testid="rail-chip"
@@ -119,7 +132,7 @@ export function RailChips({
                   ? t('gate.reviewBadge')
                   : t(item.gate.labelKey)}
               </span>
-            </React.Fragment>
+            </span>
           );
         }
         const stage = item.stage;
@@ -174,12 +187,28 @@ export function RailChips({
               defaultValue: summarizeWarning,
             })
           : undefined;
+        const outcome = file.stageRuns?.[stage.key]?.outcome;
+        const outcomeLabel = outcome ? t(`runs.outcome.${outcome}`) : '';
+        const stageTitle = [
+          t(stage.labelKey),
+          outcomeLabel,
+          stage.key === 'extractSubtitle' ? missedSpeechTitle : undefined,
+          stage.key === 'translateSubtitle'
+            ? translationFailureTitle
+            : undefined,
+          summarizeTitle,
+          manuscriptTitle,
+        ]
+          .filter(Boolean)
+          .join(' · ');
         return (
-          <React.Fragment key={stage.key}>
+          <span className="inline-flex items-center gap-1" key={stage.key}>
             {index > 0 && <ChevronRight className="h-3 w-3 text-faint" />}
             <span
               data-testid="rail-chip"
               data-status={status}
+              data-outcome={outcome}
+              aria-label={stageTitle}
               className={cn(
                 'inline-flex items-center gap-1 text-xs whitespace-nowrap',
                 status === 'pending' && 'text-faint',
@@ -188,13 +217,7 @@ export function RailChips({
                   (stageWarning ? 'text-warning' : 'text-success'),
                 status === 'error' && 'text-destructive font-medium',
               )}
-              title={
-                stage.key === 'extractSubtitle' && missedSpeechTitle
-                  ? missedSpeechTitle
-                  : stage.key === 'translateSubtitle' && translationFailureTitle
-                    ? translationFailureTitle
-                    : summarizeTitle || manuscriptTitle
-              }
+              title={stageTitle}
             >
               {/* 每种状态都占同样大小的图标位：阶段推进时标签不会左右跳动 */}
               {status === 'pending' && <Circle className="h-3 w-3" />}
@@ -204,6 +227,10 @@ export function RailChips({
               {status === 'done' &&
                 (stageWarning ? (
                   <CircleAlert className="h-3 w-3" />
+                ) : outcome === 'reused' ? (
+                  <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                ) : outcome === 'not_applicable' ? (
+                  <Minus className="h-3 w-3" aria-hidden="true" />
                 ) : (
                   <CheckCircle2 className="h-3 w-3" />
                 ))}
@@ -250,7 +277,7 @@ export function RailChips({
                 </span>
               ) : null}
             </span>
-          </React.Fragment>
+          </span>
         );
       })}
     </div>
@@ -258,6 +285,7 @@ export function RailChips({
 }
 
 const TaskRowList: React.FC<TaskRowListProps> = ({
+  inputsLocked = false,
   files,
   typeDef,
   formData,
@@ -270,9 +298,28 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
   onInspectDubbing,
   onAssignManuscript,
   onImport,
+  scrollElementRef,
 }) => {
   const { t } = useTranslation('tasks');
+  const virtual = files.length >= 50 && Boolean(scrollElementRef);
+  // Stable keys preserve measurements across progress snapshots, while still
+  // invalidating them when files are inserted, removed or reordered.
+  const keySignature = JSON.stringify(files.map((file) => file.uuid));
+  const getItemKey = useMemo(() => {
+    const keys = files.map((file) => file.uuid);
+    return (index: number) => keys[index] ?? index;
+  }, [keySignature]);
+  const virtualizer = useVirtualizer({
+    enabled: virtual,
+    count: files.length,
+    getScrollElement: () => scrollElementRef?.current ?? null,
+    getItemKey,
+    estimateSize: () => 112,
+    gap: 8,
+    overscan: 5,
+  });
   const queueBusy =
+    inputsLocked ||
     taskStatus === 'running' ||
     taskStatus === 'paused' ||
     taskStatus === 'cancelling';
@@ -398,8 +445,17 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
   }
 
   return (
-    <div data-testid="task-list" className="space-y-2">
-      {files.map((file) => {
+    <div
+      data-testid="task-list"
+      className={virtual ? 'relative' : 'space-y-2'}
+      style={virtual ? { height: virtualizer.getTotalSize() } : undefined}
+    >
+      {(virtual
+        ? virtualizer
+            .getVirtualItems()
+            .map((item) => ({ file: files[item.index], item }))
+        : files.map((file) => ({ file, item: null }))
+      ).map(({ file, item }) => {
         const stages = getFileStages(file, typeDef, formData);
         const rail = getFileRail(file, typeDef, formData);
         const dockedGate = getDockedGate(file, formData);
@@ -436,13 +492,13 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
                 count: file.translationFailures.length,
               })
             : '';
-        const displayWarning = [
-          warningMsg,
-          missedSpeechWarning,
-          translationFailureWarning,
-        ]
-          .filter(Boolean)
-          .join(' · ');
+        const displayWarning = Array.from(
+          new Set(
+            [warningMsg, missedSpeechWarning, translationFailureWarning].filter(
+              Boolean,
+            ),
+          ),
+        ).join(' · ');
         const tone = getRowTone(status.state, failed, Boolean(displayWarning));
         const started = stages.some(
           (s) => getStageStatus(file, s.key) !== 'pending',
@@ -469,6 +525,19 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
         return (
           <div
             key={file?.uuid}
+            data-index={item?.index}
+            ref={item ? virtualizer.measureElement : undefined}
+            style={
+              item
+                ? {
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${item.start}px)`,
+                  }
+                : undefined
+            }
             data-testid="task-row"
             data-tone={tone}
             data-state={status.state}
@@ -477,7 +546,7 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
               ROW_TONE_BORDER[tone],
             )}
           >
-            <div className="flex items-center gap-3">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_160px_64px_auto] items-center gap-x-3 gap-y-2">
               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                 <button
                   type="button"
@@ -519,7 +588,12 @@ const TaskRowList: React.FC<TaskRowListProps> = ({
                 )}
               </div>
 
-              <RailChips file={file} rail={rail} t={t} />
+              <RailChips
+                file={file}
+                rail={rail}
+                t={t}
+                className="col-span-full row-start-2 pl-5"
+              />
 
               <div className="flex items-center gap-2 w-[160px] flex-shrink-0">
                 <Progress

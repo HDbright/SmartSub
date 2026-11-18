@@ -7,10 +7,9 @@
     "retry": "重试保存",
     "loadFailed": "任务草稿读取失败，暂不可编辑或运行。"
   },
-  "advancedSettings": "专家参数",
   "readiness": {
-    "translation_style_requires_ai": "情感口语化翻译需要 AI 翻译服务。请选择 AI 服务，或在专家参数中切换为常规翻译。",
-    "speaker_diarization_unavailable": "角色分离模型或运行库未就绪。请在引擎页安装，或在专家参数中关闭角色分离。",
+    "translation_style_requires_ai": "情感口语化翻译需要 AI 翻译服务。请选择 AI 服务，或在「更多设置 › 常用」中切换为常规翻译。",
+    "speaker_diarization_unavailable": "角色分离模型或运行库未就绪。请在引擎页安装，或在「更多设置 › 常用」中关闭角色分离。",
     "tts_unavailable": "所选配音引擎不存在或配置不完整。",
     "tts_voice_unavailable": "所选音色已不可用，请重新选择。",
     "tts_language_unsupported": "所选配音引擎不支持当前配音语言。",
@@ -103,6 +102,7 @@
     "composeEncoder": "编码方式",
     "composeEncoderUnavailable": "（本机不可用）",
     "composeAudioHint": "配音完成后将自动替换视频原声",
+    "composeContentHint": "成片字幕内容跟随「输出内容」设置：{{content}}",
     "composeStyleHint": "样式可在合成工作台微调并保存为「我的样式」，",
     "composeStyleLink": "去调整样式",
     "gatesTitle": "人工把关（可选）",
@@ -165,9 +165,10 @@
     "tagAi": "AI 大模型",
     "tagTraditional": "传统机翻",
     "toastTraditionalRefineConflict": "已切换为「{{provider}}」。因开启了「{{feature}}」，传统接口无法执行精修，建议在「断句与精修」中单独选择 AI 模型或关闭该功能。",
+    "output": "输出",
     "style": "输出内容",
     "format": "字幕格式",
-    "embeddedSubtitles": "优先内封字幕",
+    "embeddedSubtitles": "优先使用内封字幕",
     "glossary": "词库",
     "glossaryAllEnabled": "全局已启用",
     "glossaryNone": "不使用词库",
@@ -246,10 +247,35 @@
   "skippedDuplicates": "已跳过 {{count}} 个重复文件",
   "goDownloadModel": "去下载模型",
   "goConfigureProvider": "去配置翻译服务",
-  "advanced": "高级选项",
-  "advancedDesc": "不常改的细节设置，默认值即最佳实践",
+  "settings": {
+    "title": "更多设置",
+    "description": "默认值适合大多数视频，按需调整",
+    "tabs": {
+      "common": "常用",
+      "expert": "专家"
+    },
+    "summary": {
+      "scenario": "场景",
+      "adjusted": "已调整 {{count}} 项",
+      "restore": "恢复场景默认"
+    },
+    "groups": {
+      "source": "字幕来源",
+      "assist": "识别辅助",
+      "translate": "翻译与润色",
+      "output": "输出与保存",
+      "run": "运行",
+      "strategy": "识别策略",
+      "segmentTuning": "断句精调",
+      "decoding": "解码参数"
+    },
+    "strategy": {
+      "hint": "决定识别时更偏向保留每个细节，还是更偏向压制重复与幻觉字幕。场景已经带了合适的档位，想覆盖它时才需要改。",
+      "unsupported": "当前引擎（云端听写 / 本地命令行）不使用识别策略，识别效果由服务或命令本身决定。"
+    }
+  },
   "outcome": {
-    "label": "字幕效果",
+    "label": "识别策略",
     "recommended": "推荐",
     "accurate": {
       "title": "文字最准",
@@ -268,9 +294,9 @@
       "scene": "适合长视频，或含音乐 / 掌声 / 长静音的素材"
     },
     "custom": {
-      "title": "自定义",
+      "title": "手动调节",
       "desc": "手动调整上下文长度、VAD、抗重复等底层参数。",
-      "sectionTitle": "自定义参数",
+      "sectionTitle": "手动调节参数",
       "sherpaNote": "当前引擎（FunASR / Qwen / FireRed / Parakeet）的 VAD 为结构性常开，且无「上下文长度 / 抗重复」概念。如需细调 VAD 灵敏度，请到「设置」页调整。"
     },
     "compare": {
@@ -281,10 +307,10 @@
       "clean": "今天我们来讲一下这个新功能"
     }
   },
-  "section": {
-    "recognition": "转写",
-    "output": "输出与保存",
-    "execution": "执行"
+  "embeddedSubtitleSetting": {
+    "description": "视频自带文本字幕轨时直接提取，跳过语音识别；没有字幕轨的视频照常识别。",
+    "promptLabel": "开始前提示我选择",
+    "promptDescription": "检测到视频带内封字幕时，开始前先问一次。"
   },
   "vad": {
     "label": "语音活动检测（VAD）",
@@ -511,7 +537,7 @@
     "subtitleFormats": "支持 SRT / VTT / ASS / SSA / LRC 字幕",
     "step1": "导入文件",
     "step2": "核对配置",
-    "step2Desc": "在上方配置条选择引擎、模型与语言，高级参数在右上角",
+    "step2Desc": "在上方配置条选择引擎、模型与语言，更多设置在右上角",
     "step3": "开始任务",
     "step3Desc": "点击右下角开始按钮，批量处理并实时查看进度"
   },
@@ -564,30 +590,55 @@
       "preserveSpeechPauses": "保留原声停顿"
     },
     "title": "场景预设",
-    "customHint": "微调以下参数将自动切换为自定义",
+    "adjusted": "已调整",
+    "footer": {
+      "adjusted": "已调整：{{groups}}。切换场景会重置这些调整。",
+      "restore": "恢复为「{{name}}」",
+      "custom": "当前不再对应任何场景，选一个场景可重置。",
+      "groupSeparator": "、",
+      "moreSettings": "更多设置",
+      "expertSettings": "专家设置"
+    },
+    "groups": {
+      "recognitionStrategy": "识别策略",
+      "decoding": "解码参数",
+      "vadRepetition": "VAD 与抗重复",
+      "segmentLength": "断句长度",
+      "segmentTuning": "断句精调",
+      "speakerDiarization": "角色分离",
+      "aiCorrection": "AI 校正",
+      "fillerPolicy": "语气词处理",
+      "translationStyle": "翻译风格",
+      "subtitleLayout": "字幕排版"
+    },
     "interview": {
       "name": "会议访谈 / 播客",
+      "scene": "多人轮流说话：会议、访谈、播客、对谈",
       "desc": "短句切分、本地说话人聚类、保留原声停顿；需角色分离模型"
     },
     "lecture": {
       "name": "网课演讲 / 教程",
+      "scene": "一个人讲、信息密度高：网课、演讲、教程、讲座",
       "desc": "VAD 与抗重复、AI 术语校正、智能去停顿词；需 AI 精修服务"
     },
     "movie": {
       "name": "影视 / Vlog",
+      "scene": "有情绪的对白：电影、电视剧、Vlog",
       "desc": "紧凑双行、自然切句、保留情绪；翻译时需 AI 口语化服务"
     },
     "shortDrama": {
       "name": "短剧 / 短视频",
+      "scene": "节奏快、句子短：短剧、短视频、口播切片",
       "desc": "紧凑双行短句、保留情绪和停顿；翻译时需 AI 口语化服务"
     },
     "balanced": {
       "name": "通用均衡",
-      "desc": "兼顾转写速度与断句稳定性，适合绝大多数常规场景"
+      "scene": "拿不准就选它：大多数常规视频",
+      "desc": "兼顾转写速度与断句稳定性，不额外调整任何参数"
     },
     "custom": {
-      "name": "专家自定义",
-      "desc": "自由配置 Beam Size、VAD 灵敏度与幻觉过滤等底层参数"
+      "name": "自定义",
+      "desc": "在「更多设置 › 专家」里选了手动调节，不再对应任何场景"
     }
   },
   "configLoad": {
@@ -677,5 +728,81 @@
       "interrupted": "任务已中断，等待重试",
       "paused": "已暂停，等待继续"
     }
+  },
+  "runs": {
+    "current": "当前运行",
+    "history": "历史运行",
+    "editNext": "编辑下一轮配置",
+    "retry": "重试失败阶段",
+    "readOnly": "历史结果（只读）",
+    "configuration": "执行配置",
+    "lockedHint": "当前运行的配置和文件已锁定。暂停会在当前阶段结束后释放处理资源。",
+    "draftHint": "正在编辑下一轮草稿。开始后重新评估所有文件，并复用未变化的有效阶段产物。",
+    "resultHint": "本轮结果和配置已保留。可编辑下一轮草稿，或使用相同配置再次开始；历史校对和配音修改不会自动带入新运行。",
+    "stages": {
+      "prepareInput": "校验输入",
+      "extractAudio": "提取音频",
+      "extractSubtitle": "获取字幕",
+      "refineSubtitle": "字幕精修",
+      "manuscriptMatch": "文稿匹配",
+      "normalizeSubtitle": "字幕归一",
+      "summarizeEpisode": "通读摘要",
+      "translateSubtitle": "翻译",
+      "speakerDiarization": "角色分析",
+      "annotateSpeakers": "角色标注",
+      "prepareProofread": "校对数据",
+      "exportSubtitle": "导出字幕",
+      "subtitleReview": "字幕校对",
+      "dubbing": "配音",
+      "dubbingTrack": "构建音轨",
+      "dubbingReview": "配音确认",
+      "composeVideo": "合成视频"
+    },
+    "status": {
+      "preparing": "准备中",
+      "queued": "排队中",
+      "running": "执行中",
+      "pausing": "当前阶段结束后暂停",
+      "paused": "已暂停",
+      "waiting_review": "等待人工确认",
+      "cancelling": "取消中",
+      "cancelled": "已取消",
+      "succeeded": "已完成",
+      "failed": "执行失败",
+      "interrupted": "已中断"
+    },
+    "outcome": {
+      "executed": "已执行",
+      "reused": "已复用",
+      "not_applicable": "无需执行",
+      "degraded": "已降级",
+      "pending": "待执行",
+      "running": "执行中",
+      "succeeded": "已完成",
+      "failed": "失败",
+      "interrupted": "已中断",
+      "waiting_review": "待确认",
+      "cancelled": "已取消"
+    },
+    "legacyHint": "旧版运行记录：部分有效配置缺失，未使用当前默认值补写历史。"
+  },
+  "processing": {
+    "processAgain": "重新处理",
+    "configLocked": "处理中，参数暂不可修改。取消后可调整参数重新处理。",
+    "adjustAndRepeat": "可以直接调整参数后重新处理，未变化的步骤会自动复用。"
+  },
+  "stageSettings": {
+    "label": "处理参数",
+    "subtitle": "字幕",
+    "subtitleTranslate": "字幕与翻译",
+    "dubbing": "配音",
+    "compose": "视频合成",
+    "review": "流程设置",
+    "automatic": "自动继续",
+    "savedValue": "已保存的选择",
+    "choose": "请选择",
+    "dubbingUnavailable": "已保留原来的引擎和音色。当前不可用，请检查服务配置或选择其他音色。",
+    "styleSnapshot": "使用此任务保存的字幕样式；重新选择样式后才会更新。",
+    "composeOptionsUnavailable": "部分合成选项加载失败，已保留任务参数。重新打开页面可重试加载。"
   }
 }

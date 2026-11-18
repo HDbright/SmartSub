@@ -1,3 +1,5 @@
+import { assertTaskStorageWritable } from './taskRuns/maintenance';
+import { TASK_STAGE_KEYS as STAGE_KEYS } from '../../types/taskStages';
 import { store } from './store';
 import type { IFiles, TaskProject } from '../../types';
 import type { ProofreadTask } from '../../types/proofread';
@@ -26,19 +28,6 @@ function normalizeProofreadStatus(item: WorkItem): WorkItem {
       status === 'done' ? (item.finishedAt ?? item.updatedAt) : undefined,
   };
 }
-
-const STAGE_KEYS = [
-  'extractAudio',
-  'extractSubtitle',
-  'refineSubtitle',
-  'manuscriptMatch',
-  'translateSubtitle',
-  'prepareSubtitle',
-  'speakerDiarization',
-  'exportSubtitle',
-  'dubbing',
-  'composeVideo',
-] as const;
 
 function markInterruptedFile(file: IFiles): IFiles {
   const next: Record<string, any> = { ...file };
@@ -149,6 +138,7 @@ export function flushWorkItemStore(): void {
 }
 
 function commitWorkItems(next: WorkItem[]): void {
+  assertTaskStorageWritable();
   // electron-store writes atomically and fsyncs before returning. Publish only
   // after that write succeeds, so a failed save cannot appear in subsequent reads.
   store.set(WORK_ITEMS_KEY, next);
@@ -240,6 +230,7 @@ export function saveWorkItem(
   item: WorkItem,
   options: { durable?: boolean } = {},
 ): WorkItem {
+  assertTaskStorageWritable();
   const index = workItems.findIndex((existing) => existing.id === item.id);
   const now = Date.now();
   const next: WorkItem = normalizeProofreadStatus({

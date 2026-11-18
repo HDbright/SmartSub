@@ -32,7 +32,6 @@ import {
 import {
   fetchRemoteVersions,
   checkAllUpdates,
-  getRemoteVersionInfo,
   getPackageDownloadSize,
 } from './addonVersions';
 import { resetSuppressions, snapshotBreaker } from './crash/nativeGuard';
@@ -97,7 +96,7 @@ export function registerAddonIpcHandlers(): void {
     },
   );
 
-  // 获取当前生效的后端（最近一次加载结果）
+  // 获取当前会话实际加载的后端；重启或切换后未加载时为 null
   ipcMain.handle('get-active-backend', async () => {
     try {
       return getActiveBackend();
@@ -162,13 +161,13 @@ export function registerAddonIpcHandlers(): void {
         // 异步启动下载，不等待完成
         downloader
           .download(config.source, config.variant, config.type)
-          .then(async () => {
+          .then(({ provenance }) => {
             // 下载完成后注册加速包并自动选中
-            const remoteInfo = await getRemoteVersionInfo(config.variant);
             registerInstalledAddon(
               config.variant,
-              remoteInfo?.version ||
-                new Date().toISOString().split('T')[0].replace(/-/g, '.'),
+              provenance.releaseVersion,
+              provenance.packageSha256,
+              provenance,
             );
             // 自动选中刚下载的版本
             selectAddonVersion(config.variant);

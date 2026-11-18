@@ -26,14 +26,18 @@ import { luxAdapter } from './videoDownload/luxAdapter';
 import { withCookieFile } from './videoDownload/engineAdapter';
 import {
   deleteCookieProfile,
+  clearCookieProfiles,
   listCookieProfiles,
 } from './videoDownload/cookieProfileStore';
 import {
   importCookiesFromBrowser,
   importCookiesFromFile,
   importCookiesFromPaste,
+  importAllCookiesFromBrowser,
+  importAllCookiesFromFile,
   type SupportedBrowser,
 } from './videoDownload/cookieImport';
+import { listBrowserCookieProfiles } from './videoDownload/browserCookieSource';
 import { isDownloadableHttpUrl, routeEngines } from '../../types/download';
 import type {
   DownloadEngineChoice,
@@ -345,6 +349,42 @@ export function setupVideoDownloadHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle(
+    'videoDownload:cookieProfiles:browserProfiles',
+    (_event, payload: { browser: SupportedBrowser }) =>
+      listBrowserCookieProfiles(payload.browser),
+  );
+
+  ipcMain.handle(
+    'videoDownload:cookieProfiles:importAllFromBrowser',
+    (_event, payload: { browser: SupportedBrowser; browserProfile?: string }) =>
+      importAllCookiesFromBrowser({
+        browser: payload.browser,
+        browserProfile: payload.browserProfile,
+      }),
+  );
+
+  ipcMain.handle(
+    'videoDownload:cookieProfiles:importAllFile',
+    async (_event, payload?: { sourcePath?: string }) => {
+      const picked = payload?.sourcePath
+        ? { canceled: false, filePaths: [payload.sourcePath] }
+        : await dialog.showOpenDialog(dialogWindow(mainWindow), {
+            title: 'Select cookies.txt',
+            properties: ['openFile'],
+            filters: [
+              { name: 'Cookies', extensions: ['txt'] },
+              { name: 'All Files', extensions: ['*'] },
+            ],
+          });
+      if (picked.canceled || !picked.filePaths[0]) return { cancelled: true };
+      return {
+        cancelled: false,
+        ...importAllCookiesFromFile({ filePath: picked.filePaths[0] }),
+      };
+    },
+  );
+
+  ipcMain.handle(
     'videoDownload:cookieProfiles:importFile',
     async (
       _event,
@@ -396,12 +436,14 @@ export function setupVideoDownloadHandlers(mainWindow: BrowserWindow): void {
       payload: {
         id: string;
         browser: SupportedBrowser;
+        browserProfile?: string;
         customDef?: CustomDefPayload;
       },
     ) =>
       importCookiesFromBrowser({
         id: payload.id,
         browser: payload.browser,
+        browserProfile: payload.browserProfile,
         customDef: payload.customDef,
       }),
   );
@@ -410,4 +452,9 @@ export function setupVideoDownloadHandlers(mainWindow: BrowserWindow): void {
     'videoDownload:cookieProfiles:delete',
     (_event, payload: { id: string }) => deleteCookieProfile(payload.id),
   );
+
+  ipcMain.handle('videoDownload:cookieProfiles:clearAll', () => {
+    clearCookieProfiles();
+    return true;
+  });
 }

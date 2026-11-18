@@ -19,6 +19,7 @@ import SubtitlePreviewOverlay from './SubtitlePreviewOverlay';
 import { LIBASS_SRT_PLAYRES_Y, formatDuration } from './utils/styleUtils';
 import { useJassubPreview } from './hooks/useJassubPreview';
 import SubtitleCanvas from './SubtitleCanvas';
+import FontFallbackNotice from './FontFallbackNotice';
 import type { SubtitleSafeArea } from '../../../types/subtitleCanvas';
 import {
   Select,
@@ -323,6 +324,19 @@ export default function VideoPreview({
             })}
           </p>
         )}
+      {!softMux && !previewError && jassub.effectiveFont && (
+        <FontFallbackNotice
+          report={jassub.fontReport}
+          fontName={style.fontName}
+          subtitlePath={subtitlePath}
+          sampleText={sampleText}
+          onSelectFont={
+            onUpdateStyle
+              ? (fontName) => onUpdateStyle({ fontName })
+              : undefined
+          }
+        />
+      )}
       {previewError && (
         <div
           role="alert"
