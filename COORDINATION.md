@@ -23,7 +23,7 @@
 
 | Agent | 会话 | 文件范围 | 版本认领 | 状态 |
 |---|---|---|---|---|
-| zcode(小智) | 小智-1 | ①移植有道 AI 翻译 LLM（含限额自动解除）新增 main/service/youdaoLlmFree.ts 及注册；②Ollama 导入 Hy-MT2 GGUF + SmartSub AI 提供商配置（本机环境操作） | 不涉及（免费源无版本发布） | 开工 11-18 09:05 |
+| zcode(小智) | 小智-1 | 发版：package.json 版本号、build:local 打包、本机 app.asar 升级复制 | 认领 3.12.4 | 开工 11-18 10:00 |
 
 ## 发布台账（最新在上，双方都追加）
 
