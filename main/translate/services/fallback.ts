@@ -5,6 +5,9 @@ import {
   bingFreeTranslator,
   googleFreeTranslator,
   deeplxTranslator,
+  volcengineFreeTranslator,
+  caiyunFreeTranslator,
+  tencentFreeTranslator,
 } from '../../service';
 import { getYoudaoFreeAvailability } from '../../service/youdaoFree';
 import { getGoogleFreeAvailability } from '../../service/googleFree';
@@ -26,6 +29,9 @@ import type { TranslationRequestOptions } from '../types';
 
 const SOURCE_MAP: Record<string, TranslatorFunction> = {
   youdaoFree: youdaoFreeTranslator as unknown as TranslatorFunction,
+  volcengineFree: volcengineFreeTranslator as unknown as TranslatorFunction,
+  caiyunFree: caiyunFreeTranslator as unknown as TranslatorFunction,
+  tencentFree: tencentFreeTranslator as unknown as TranslatorFunction,
   bingFree: bingFreeTranslator as unknown as TranslatorFunction,
   googleFree: googleFreeTranslator as unknown as TranslatorFunction,
   deeplx: deeplxTranslator as unknown as TranslatorFunction,

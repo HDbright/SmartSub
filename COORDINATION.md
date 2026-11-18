@@ -23,9 +23,11 @@
 
 | Agent | 会话 | 文件范围 | 版本认领 | 状态 |
 |---|---|---|---|---|
-| （空） | | | | |
+| zcode(小智) | 小智-1 | 移植 hedaoDict 三个免签翻译源：新增 main/service/{volcengineFree,caiyunFree,tencentFree}.ts + types/provider.ts + translationProvider.ts + i18n | 不涉及（免费源无版本发布） | 开工 11-18 08:50 |
 
 ## 发布台账（最新在上，双方都追加）
 
 | 版本 | 内容 | 发布者 | 时间 |
 |---|---|---|---|
+| 3.12.3 | 上游 v3.12.2 合并 + 本地定制（复读/BLE/WIP 增强）；安装包 dist\SmartSub_Windows_3.12.3_x64.exe；本机 app.asar 已升级（SHA256 481d628d… 核对一致） | 小智-1 | 11-18 08:48 |
+| 3.10.2 | 上游 v3.10.1 合并 + 本地定制（复读/BLE/提示音）；安装包 dist\SmartSub_Windows_3.10.2_x64.exe；本机 app.asar 已升级（SHA256 ac2050…5206 核对一致） | 小智-1 | 10-27 22:48 |

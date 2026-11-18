@@ -437,7 +437,8 @@ export const PROVIDER_TYPES: ProviderType[] = [
         label: 'fallbackChain',
         type: 'chain',
         required: false,
-        defaultValue: 'youdaoFree,bingFree,googleFree,deeplx',
+        defaultValue:
+          'youdaoFree,volcengineFree,caiyunFree,tencentFree,bingFree,googleFree,deeplx',
         tips: 'fallbackChainTips',
       },
       {
@@ -529,6 +530,75 @@ export const PROVIDER_TYPES: ProviderType[] = [
       ...apiBatchFields(5, 'batchSizeGoogleFreeTips', {
         ...FIELD_REQUEST_INTERVAL,
         defaultValue: 0.5,
+      }),
+    ],
+  },
+  {
+    id: 'volcengineFree',
+    name: 'volcengineFree',
+    isBuiltin: true,
+    isAi: false,
+    group: 'free',
+    icon: '🌋',
+    fields: [
+      {
+        key: 'windowMaxRequests',
+        label: 'windowMaxRequests',
+        type: 'number',
+        required: false,
+        defaultValue: 0,
+        tips: 'windowMaxRequestsTips',
+        placeholder: 'phWindowMaxRequests',
+      },
+      ...apiBatchFields(10, 'batchSizeVolcengineFreeTips', {
+        ...FIELD_REQUEST_INTERVAL,
+        defaultValue: 0.2,
+      }),
+    ],
+  },
+  {
+    id: 'caiyunFree',
+    name: 'caiyunFree',
+    isBuiltin: true,
+    isAi: false,
+    group: 'free',
+    icon: '☁️',
+    fields: [
+      {
+        key: 'windowMaxRequests',
+        label: 'windowMaxRequests',
+        type: 'number',
+        required: false,
+        defaultValue: 0,
+        tips: 'windowMaxRequestsTips',
+        placeholder: 'phWindowMaxRequests',
+      },
+      ...apiBatchFields(10, 'batchSizeCaiyunFreeTips', {
+        ...FIELD_REQUEST_INTERVAL,
+        defaultValue: 0.2,
+      }),
+    ],
+  },
+  {
+    id: 'tencentFree',
+    name: 'tencentFree',
+    isBuiltin: true,
+    isAi: false,
+    group: 'free',
+    icon: '🐧',
+    fields: [
+      {
+        key: 'windowMaxRequests',
+        label: 'windowMaxRequests',
+        type: 'number',
+        required: false,
+        defaultValue: 0,
+        tips: 'windowMaxRequestsTips',
+        placeholder: 'phWindowMaxRequests',
+      },
+      ...apiBatchFields(10, 'batchSizeTencentFreeTips', {
+        ...FIELD_REQUEST_INTERVAL,
+        defaultValue: 0.2,
       }),
     ],
   },

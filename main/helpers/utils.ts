@@ -528,6 +528,7 @@ export const supportedLanguage = [
     google: 'zh-TW',
     niutrans: 'cht',
     tencent: 'zh-TW',
+    caiyun: null,
     xunfei: 'cht',
     qwenMt: 'Traditional Chinese',
   },
@@ -545,6 +546,9 @@ export const supportedLanguage = [
 type TranslateProvider =
   | 'baidu'
   | 'volc'
+  | 'volcFree'
+  | 'caiyun'
+  | 'tencentJun'
   | 'aliyun'
   | 'google'
   | 'bing'

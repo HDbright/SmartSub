@@ -16,5 +16,12 @@
 
 | # | 时间 | 发 → 收 | 类型 | 内容 | 状态 |
 |---|---|---|---|---|---|
-| 2 | 10-27 11:12 | 小智-1 → 全体 | 完工 | 合并上游 v3.10.1 完成（merge 5eb38ba2 + lock 4949c741），typecheck/i18n/构建全过；9 月旧 WIP 已还原至工作区未提交，完整备份在分支 wip/20260911-main-list-ass-color 与 .git/pre-merge-v3.10.1-wip-backup.patch；其中 SubtitleList 的 forwardRef 改造与上游 inline-AI 重构冲突，本次取上游版、WIP 待后续重做（见总线 #1） | 待读 |
+| 9 | 11-18 08:50 | 小智-1 → 全体 | 开工 | 从 hedaoDict（TechDecryptor pot 插件协议）移植三个免签免费翻译源：火山翻译/彩云小译/腾讯翻译君 → 新增 3 个 main/service/*Free.ts + provider 注册 + i18n；不动现有 provider，只追加 | 待读 |
+| 8 | 11-18 08:48 | 小智-1 → 全体 | 已发布 | 3.12.3 已出包并升级本机：dist\SmartSub_Windows_3.12.3_x64.exe（155.9MB）；D:\Program Files\SmartSub 提权替换 app.asar（SHA256 481d628d… 核对一致）并已重启；版本提交 a2294c4f 已推双镜像。本机获得：长路径转录修复、Vulkan 转写诊断、任务中断续跑、大批次性能优化 | 已读 |
+| 7 | 11-18 08:42 | 小智-1 → 全体 | 认领版本 | 认领 3.12.3（= 上游已并 3.12.2 + 1）；build:local 打安装包、提权升级本机（本机现跑 3.10.2，将获得长路径修复/Vulkan 诊断/任务续跑等），完成后台账登记 | 已读 |
+| 6 | 11-18 08:34 | 小智-1 → 全体 | 完工 | 合并上游 v3.12.2 完成（merge bafd4429 + lock 5caab99c），唯一冲突 package.json 版本号；typecheck/i18n/build 全过，已推双镜像；9 月 WIP stash pop 零冲突恢复（备份 .git/pre-merge-v3.12.2-wip-backup.patch）；本地版本现 3.12.2，本地定制发版时按黑板取 3.12.3+ | 已读 |
+| 5 | 11-18 08:28 | 小智-1 → 全体 | 开工 | 合并上游 origin tag v3.12.2（含 v3.11 设置重构，冲突面预计大于上次）；工作区 9 月 WIP 先 stash 保管不提交，验证后恢复；合并提交沿用 --no-verify / 锁文件取上游惯例 | 已读 |
+| 4 | 10-27 22:48 | 小智-1 → 全体 | 已发布 | 3.10.2 已出包并升级本机：dist\SmartSub_Windows_3.10.2_x64.exe（155.8MB）；本机 D:\Program Files\SmartSub 经提权替换 app.asar（SHA256 核对一致）并已重启运行；版本提交 5e837e30 已推双镜像 | 已读 |
+| 3 | 10-27 22:35 | 小智-1 → 全体 | 认领版本 | 认领 3.10.2（= 上游已并 3.10.1 + 1，避让上游官方 tag）；随后 build:local 打安装包、提权升级本机安装版，完成后台账登记 | 已读 |
+| 2 | 10-27 11:12 | 小智-1 → 全体 | 完工 | 合并上游 v3.10.1 完成（merge 5eb38ba2 + lock 4949c741），typecheck/i18n/构建全过；9 月旧 WIP 已还原至工作区未提交，完整备份在分支 wip/20260911-main-list-ass-color 与 .git/pre-merge-v3.10.1-wip-backup.patch；其中 SubtitleList 的 forwardRef 改造与上游 inline-AI 重构冲突，本次取上游版、WIP 待后续重做（见总线 #1） | 已读 |
 | 1 | 10-27 10:26 | 小智-1 → 全体 | 开工 | 合并上游 origin tag v3.10.1；预计冲突面 package.json、locales/common.json、main/background.ts、Layout.tsx 等 11 个交集文件；工作区 9-11~9-12 旧 WIP（timeline/assInline/repeat 增强）先 stash+patch 双备份，合并验证后恢复、不代提交 | 已读 |

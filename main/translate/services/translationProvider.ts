@@ -22,6 +22,9 @@ import {
   bingFreeTranslator,
   googleFreeTranslator,
   youdaoFreeTranslator,
+  volcengineFreeTranslator,
+  caiyunFreeTranslator,
+  tencentFreeTranslator,
   doubaoTranslator,
   niutransTranslator,
   tencentTranslator,
@@ -38,13 +41,17 @@ import {
 import { ProviderFallbackRunner } from './providerFallback';
 
 /**
- * autoFree 默认回退链：有道免费 → Bing 免费 → Google 免费 → DeepLX。
- * 有道在前是速度优先（批量请求，远快于逐条的必应），代价是译文略逊于必应。
+ * autoFree 默认回退链：有道免费 → 火山免费 → 彩云免费 → 腾讯翻译君免费 → Bing 免费 → Google 免费 → DeepLX。
+ * 有道在前是速度优先（批量请求，远快于逐条的必应）；新增的火山/彩云/腾讯翻译君三个免签源
+ * 提供多通道冗余（协议移植自 hedaoDict，TechDecryptor pot 插件同款）。
  * 改顺序时同步 types/provider.ts 中 autoFree 的 fallbackChain 默认值、
  * translateControl.json 的 phFallbackChain，以及 providerMigration.ts 的目标链。
  */
 export const DEFAULT_FREE_FALLBACK_CHAIN = [
   'youdaoFree',
+  'volcengineFree',
+  'caiyunFree',
+  'tencentFree',
   'bingFree',
   'googleFree',
   'deeplx',
@@ -66,6 +73,9 @@ export const TRANSLATOR_MAP = {
   siliconflow: openaiTranslator,
   google: googleTranslator,
   youdaoFree: youdaoFreeTranslator,
+  volcengineFree: volcengineFreeTranslator,
+  caiyunFree: caiyunFreeTranslator,
+  tencentFree: tencentFreeTranslator,
   bingFree: bingFreeTranslator,
   googleFree: googleFreeTranslator,
   autoFree: createFallbackTranslator(DEFAULT_FREE_FALLBACK_CHAIN),
