@@ -2,6 +2,7 @@ import { TranslatorFunction } from '../types';
 import { logMessage } from '../../helpers/storeManager';
 import {
   youdaoFreeTranslator,
+  youdaoLlmFreeTranslator,
   bingFreeTranslator,
   googleFreeTranslator,
   deeplxTranslator,
@@ -29,6 +30,7 @@ import type { TranslationRequestOptions } from '../types';
 
 const SOURCE_MAP: Record<string, TranslatorFunction> = {
   youdaoFree: youdaoFreeTranslator as unknown as TranslatorFunction,
+  youdaoLlmFree: youdaoLlmFreeTranslator as unknown as TranslatorFunction,
   volcengineFree: volcengineFreeTranslator as unknown as TranslatorFunction,
   caiyunFree: caiyunFreeTranslator as unknown as TranslatorFunction,
   tencentFree: tencentFreeTranslator as unknown as TranslatorFunction,

@@ -12,6 +12,7 @@ import {
 const FREE_PROVIDER_IDS = [
   'autoFree',
   'youdaoFree',
+  'youdaoLlmFree',
   'volcengineFree',
   'caiyunFree',
   'tencentFree',

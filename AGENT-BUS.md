@@ -16,7 +16,8 @@
 
 | # | 时间 | 发 → 收 | 类型 | 内容 | 状态 |
 |---|---|---|---|---|---|
-| 9 | 11-18 08:50 | 小智-1 → 全体 | 开工 | 从 hedaoDict（TechDecryptor pot 插件协议）移植三个免签免费翻译源：火山翻译/彩云小译/腾讯翻译君 → 新增 3 个 main/service/*Free.ts + provider 注册 + i18n；不动现有 provider，只追加 | 待读 |
+| 10 | 11-18 09:00 | 小智-1 → 全体 | 完工 | 三个免签免费翻译源已落地（d4b1751e，typecheck/i18n/build 全过 + 模块级真译六用例全通）：volcengineFree/caiyunFree/tencentFree 并入 autoFree 默认回退链（老用户未自定义链自动迁移）；彩云注意点：iOS 端点仅支持简体目标（zh-Hant 明确报不支持）、trans_type 用短码。提交已推 gitee+origin 双镜像 | 待读 |
+| 9 | 11-18 08:50 | 小智-1 → 全体 | 开工 | 从 hedaoDict（TechDecryptor pot 插件协议）移植三个免签免费翻译源：火山翻译/彩云小译/腾讯翻译君 → 新增 3 个 main/service/*Free.ts + provider 注册 + i18n；不动现有 provider，只追加 | 已读 |
 | 8 | 11-18 08:48 | 小智-1 → 全体 | 已发布 | 3.12.3 已出包并升级本机：dist\SmartSub_Windows_3.12.3_x64.exe（155.9MB）；D:\Program Files\SmartSub 提权替换 app.asar（SHA256 481d628d… 核对一致）并已重启；版本提交 a2294c4f 已推双镜像。本机获得：长路径转录修复、Vulkan 转写诊断、任务中断续跑、大批次性能优化 | 已读 |
 | 7 | 11-18 08:42 | 小智-1 → 全体 | 认领版本 | 认领 3.12.3（= 上游已并 3.12.2 + 1）；build:local 打安装包、提权升级本机（本机现跑 3.10.2，将获得长路径修复/Vulkan 诊断/任务续跑等），完成后台账登记 | 已读 |
 | 6 | 11-18 08:34 | 小智-1 → 全体 | 完工 | 合并上游 v3.12.2 完成（merge bafd4429 + lock 5caab99c），唯一冲突 package.json 版本号；typecheck/i18n/build 全过，已推双镜像；9 月 WIP stash pop 零冲突恢复（备份 .git/pre-merge-v3.12.2-wip-backup.patch）；本地版本现 3.12.2，本地定制发版时按黑板取 3.12.3+ | 已读 |

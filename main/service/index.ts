@@ -10,6 +10,7 @@ export { default as googleTranslator } from './google';
 export { default as bingFreeTranslator } from './bingFree';
 export { default as googleFreeTranslator } from './googleFree';
 export { default as youdaoFreeTranslator } from './youdaoFree';
+export { default as youdaoLlmFreeTranslator } from './youdaoLlmFree';
 export { default as volcengineFreeTranslator } from './volcengineFree';
 export { default as caiyunFreeTranslator } from './caiyunFree';
 export { default as tencentFreeTranslator } from './tencentFree';

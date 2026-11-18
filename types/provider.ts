@@ -603,6 +603,29 @@ export const PROVIDER_TYPES: ProviderType[] = [
     ],
   },
   {
+    id: 'youdaoLlmFree',
+    name: 'youdaoLlmFree',
+    isBuiltin: true,
+    isAi: false,
+    group: 'free',
+    icon: '🤖',
+    fields: [
+      {
+        key: 'windowMaxRequests',
+        label: 'windowMaxRequests',
+        type: 'number',
+        required: false,
+        defaultValue: 0,
+        tips: 'windowMaxRequestsTips',
+        placeholder: 'phWindowMaxRequests',
+      },
+      ...apiBatchFields(1, 'batchSizeYoudaoLlmFreeTips', {
+        ...FIELD_REQUEST_INTERVAL,
+        defaultValue: 0.5,
+      }),
+    ],
+  },
+  {
     id: 'google',
     name: 'Google Translate',
     isBuiltin: true,
